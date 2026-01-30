@@ -17,7 +17,7 @@ type RequestHandler interface {
 	HandleRequest(ctx context.Context, params json.RawMessage) (any, error)
 }
 
-type typedHandler[TRequest, TResponse comparable] struct {
+type typedHandler[TRequest, TResponse any] struct {
 	handleFunc func(ctx context.Context, req TRequest) (*TResponse, error)
 }
 
@@ -33,7 +33,7 @@ func (h *typedHandler[TRequest, TResponse]) HandleRequest(ctx context.Context, p
 // NewHandler constructs a new type-safe request handler.
 //
 // Incoming request is automatically parsed into a [TRequest] type.
-func NewHandler[TRequest, TResponse comparable](fn func(ctx context.Context, req TRequest) (*TResponse, error)) RequestHandler {
+func NewHandler[TRequest, TResponse any](fn func(ctx context.Context, req TRequest) (*TResponse, error)) RequestHandler {
 	return &typedHandler[TRequest, TResponse]{
 		handleFunc: fn,
 	}
@@ -83,7 +83,7 @@ func NewListener(handlers map[string]RequestHandler) *Listener {
 	}
 }
 
-func (l *Listener) ListenStream(ctx context.Context, conn net.Conn) {
+func (l *Listener) ListenStream(ctx context.Context, conn net.Conn) error {
 	connCtx, cancelFn := context.WithCancel(ctx)
 	defer cancelFn()
 	defer l.canceler.cancelAll()
@@ -102,7 +102,7 @@ func (l *Listener) ListenStream(ctx context.Context, conn net.Conn) {
 			trimmed := bytes.TrimSpace(data)
 			if len(trimmed) == 0 {
 				if err != nil {
-					return
+					log.Printf("empty request payload %q", data)
 				}
 				continue
 			}
@@ -113,15 +113,17 @@ func (l *Listener) ListenStream(ctx context.Context, conn net.Conn) {
 
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				return
+				return nil
 			}
 			if connCtx.Err() != nil {
-				return
+				return nil
 			}
-			log.Printf("connection read failed: %s", err)
-			return
+
+			return fmt.Errorf("connection read failed: %w", err)
 		}
 	}
+
+	return nil
 }
 
 func (l *Listener) handleRequest(ctx context.Context, w io.Writer, data []byte) error {
@@ -149,6 +151,13 @@ func (l *Listener) handleRequest(ctx context.Context, w io.Writer, data []byte) 
 	l.canceler.addRequest(req.ID, cancelFn)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Panic: %s", r)
+				_ = l.serveError(w, req.ID, ErrorCodeInternalError.Errorf("%s", r))
+			}
+		}()
+
 		defer cancelFn()
 		defer l.canceler.finishRequest(req.ID)
 

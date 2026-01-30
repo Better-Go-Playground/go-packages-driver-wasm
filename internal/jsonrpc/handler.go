@@ -83,7 +83,7 @@ func NewListener(handlers map[string]RequestHandler) *Listener {
 	}
 }
 
-func (l *Listener) ListenStream(ctx context.Context, conn net.Conn) error {
+func (l *Listener) ServeStream(ctx context.Context, conn net.Conn) error {
 	connCtx, cancelFn := context.WithCancel(ctx)
 	defer cancelFn()
 	defer l.canceler.cancelAll()

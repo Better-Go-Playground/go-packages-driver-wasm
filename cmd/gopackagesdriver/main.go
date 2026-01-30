@@ -32,5 +32,5 @@ func run() error {
 	defer conn.Close()
 
 	srv := server.NewService(ri)
-	return srv.Listener().ListenStream(ctx, conn)
+	return srv.Listener().ServeStream(ctx, conn)
 }

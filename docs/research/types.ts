@@ -7,6 +7,7 @@
 // Contains either package driver or Go command call.
 //
 // Each calls can be parent-child referenced using SpanInfo in the header.
+// Usually any "drv" call is followed by "cmd" call associated by traceId relation.
 type CallEnvelope = CallHeader & CallBody
 
 type CallBody = GoCommandCall | PackageDriverCall

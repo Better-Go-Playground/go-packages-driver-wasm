@@ -65,7 +65,7 @@ interface Result<T> {
 
 interface SpanInfo {
     // Call span ID, can be used to reference children calls.
-    spanID: number
+    spanId: number
     // parentSpanId is "spanID" of a parent call that caused this call.
     parentSpanId: number
 }
@@ -82,7 +82,7 @@ interface OverlayFile {
     path: string
 
     // Contents of Go overlay file.
-    content: {
+    Content: {
         // key-value pair of source file and actual file that needs to be read.
         replace: Record<string, string>
     }

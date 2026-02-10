@@ -9,6 +9,7 @@ Below is description of each document.
 ### `drvtrace.jsonl`
 
 The @./drvtrace.jsonl contains "trace" results of how gopls calls its built-in package driver which is an adapter for `go` command.
+The trace is used to research and build a compatible third-party Go package driver.
 
 The file format is line-delimited JSON (jsonl).
 

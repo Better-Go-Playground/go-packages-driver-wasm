@@ -10,7 +10,11 @@
 // Usually any "drv" call is followed by "cmd" call associated by traceId relation.
 type CallEnvelope = CallHeader & CallBody
 
-type CallBody = GoCommandCall | PackageDriverCall
+type CallBody = {
+  drv: PackageDriverCall
+} | {
+  cmd: GoCommandCall
+}
   
 interface CallHeader extends SpanInfo {
     // ts is call timestamp in milliseconds

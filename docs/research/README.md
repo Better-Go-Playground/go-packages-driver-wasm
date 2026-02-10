@@ -20,3 +20,7 @@ TypeScript schema of jsonl entry is described in @./types.ts and @./drivertypes.
 ### `drivertypes.go`
 
 The @./drivertypes.go type definitions for `DriverRequest` and `DriverResponse` structs used in Go package driver protocol.
+
+### `scripts`
+
+The @./scripts/ directory stores helper scripts to automate research and data analysis.

@@ -47,7 +47,7 @@ interface PackageDriverCall {
 
     // overlay is contents of overlay file that is passed to downstream "go list" command.
     // Represents the same as overlay in [DriverRequest], but contains file paths mapping only.
-    overlay: OverlayFile
+    overlay?: OverlayFile
 
     // Go package driver request.
     req: DriverRequest
@@ -65,9 +65,9 @@ interface Result<T> {
 
 interface SpanInfo {
     // Call span ID, can be used to reference children calls.
-    spanId: number
+    spanId?: number
     // parentSpanId is "spanID" of a parent call that caused this call.
-    parentSpanId: number
+    parentSpanId?: number
 }
 
 interface StackFrame {
@@ -87,4 +87,3 @@ interface OverlayFile {
         replace: Record<string, string>
     }
 }
-

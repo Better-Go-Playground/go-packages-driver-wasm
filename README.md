@@ -6,6 +6,13 @@ Goal is to provide a portable driver that can work in WASM and browser environme
 
 **Project is at early stage of development. Work in progress**
 
+## Differences
+
+Classic Go packages uses command-line arguments to pass query patterns and process enviromnent variables. \
+As WebAssembly doesn't support spawning external processes, this driver uses a custom RPC extension to provide that context in a query.
+
+See: the [`DriverRequestEnvelope`](./internal/server/server.go) type.
+
 ## References
 
 - [gopls traces and research docs](./docs/research/README.md)

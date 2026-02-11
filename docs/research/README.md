@@ -6,12 +6,12 @@ Below is description of each document.
 
 ## Files
 
-### `drvtrace.jsonl`
+### `traces`
 
-The @./drvtrace.jsonl contains "trace" results of how gopls calls its built-in package driver which is an adapter for `go` command.
-The trace is used to research and build a compatible third-party Go package driver.
+The @./traces directory contains "trace" results of how gopls calls its built-in package driver which is an adapter for `go` command.
+Trace files are used to research and build a compatible third-party Go package driver.
 
-The file format is line-delimited JSON (jsonl).
+The trace file format is line-delimited JSON (jsonl).
 
 TypeScript schema of jsonl entry is described in @./types.ts and @./drivertypes.ts including field and type documentation.
 

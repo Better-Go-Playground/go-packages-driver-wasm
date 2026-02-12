@@ -1,10 +1,10 @@
-package server
+package cmd
 
 import (
 	"context"
 )
 
-func NewApplicationContext() (context.Context, context.CancelFunc) {
+func newApplicationContext() (context.Context, context.CancelFunc) {
 	// Stub
 	return context.WithCancel(context.Background())
 }

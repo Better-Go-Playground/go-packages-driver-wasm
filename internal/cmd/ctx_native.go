@@ -1,6 +1,6 @@
 //go:build !wasm
 
-package server
+package cmd
 
 import (
 	"context"
@@ -8,6 +8,6 @@ import (
 	"os/signal"
 )
 
-func NewApplicationContext() (context.Context, context.CancelFunc) {
+func newApplicationContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt)
 }

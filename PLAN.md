@@ -11,6 +11,7 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 - Runtime is Unix-like only; Windows is explicitly out of scope.
 - Overlay paths are absolute.
 - Overlay content consists of Go source files.
+- Hard constraint: do **not** call `golang.org/x/tools/go/packages.Load` inside the driver implementation, because it can invoke the `go` command under the hood.
 - `GoVersion` is injected by the server layer (`internal/cmd/root.go`).
 - Driver logic should return concrete errors for request-level failures; for per-pattern/package failures return partial results with package-level errors.
 - Driver response should use the same `GoVersion` value from `driver.Config`.
@@ -65,6 +66,7 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 ### 2) Driver Core Behavior (internal/driver)
 
 - [ ] [P1] Implement business logic in `internal/driver/loader.go`.
+- [ ] [P1] Implement metadata loading without using `packages.Load` (driver-native package graph construction only).
 - [ ] [P1] Resolve env, build flags, tests, and overlay handling for each request.
 - [ ] [P1] Implement pattern chunking and response merge semantics (including `NotHandled` propagation).
 - [ ] [P1] Build package graph assembly: `Roots`, `Packages`, `Imports`, `ForTest`, `Module`, `GoVersion`, `DepsErrors`, `Errors`, `TypeErrors`.

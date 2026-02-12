@@ -83,6 +83,7 @@ func (cfg Config) WithDefaults() Config {
 // ConfigFromDriverRequest creates a config from Go driver request.
 func ConfigFromDriverRequest(ver GoVersion, workDir string, req packages.DriverRequest) Config {
 	return Config{
+		GoVersion:  ver,
 		Mode:       req.Mode,
 		Dir:        workDir,
 		Env:        MapEnv(req.Env),

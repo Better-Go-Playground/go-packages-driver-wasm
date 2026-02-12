@@ -32,7 +32,7 @@ interface GoCommandCall {
   args: string[]
 
   // go command output. May be post-processed or decorated by gopls (see `goListState.createDriverResponse` in `go/packages` package in golang.org/x/tools).
-  result: Result<Record<string, any> | string>
+  result: Result<string>
 }
 
 // PackageDriverCall contains arguments & context for Go package driver call.

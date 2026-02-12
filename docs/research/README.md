@@ -18,10 +18,6 @@ TypeScript schema of jsonl entry is described in @./types.ts and @./drivertypes.
 > [!TIP]
 > Use [online jsonl viewer](https://finetunedb.com/tools/jsonl-viewer) to parse and view jsonl format in user-friendly way.
 
-### `drivertypes.go`
-
-The @./drivertypes.go type definitions for `DriverRequest` and `DriverResponse` structs used in Go package driver protocol.
-
 ### `scripts`
 
 The @./scripts/ directory stores helper scripts to automate research and data analysis.

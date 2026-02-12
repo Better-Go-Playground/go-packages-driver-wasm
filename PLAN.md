@@ -12,7 +12,9 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 - Overlay paths are absolute.
 - Overlay content consists of Go source files.
 - `GoVersion` is injected by the server layer (`internal/cmd/root.go`).
-- Driver logic should return concrete errors; server layer handles `NotHandled` behavior for clients.
+- Driver logic should return concrete errors for request-level failures; for per-pattern/package failures return partial results with package-level errors.
+- Driver response should use the same `GoVersion` value from `driver.Config`.
+- Package/file selection should respect request `GOOS`/`GOARCH`, with runtime fallback when undefined.
 
 ## Key References
 
@@ -35,7 +37,7 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 
 - [ ] Support `GOPATH` and `go.mod` workspaces without `replace`.
 - [ ] Prioritize correctness over optimization; no caching/coalescing in this phase.
-- [ ] Determine and target the most frequent `packages.LoadMode` bitmask combinations from traces.
+- [x] Target the most frequent `packages.LoadMode` bitmask from traces: `32287`.
 
 ### Phase 2 (Module Extensions)
 
@@ -65,7 +67,7 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 - [ ] [P1] Implement business logic in `internal/driver/loader.go`.
 - [ ] [P1] Resolve env, build flags, tests, and overlay handling for each request.
 - [ ] [P1] Implement pattern chunking and response merge semantics (including `NotHandled` propagation).
-- [ ] [P1] Build package graph assembly: `Roots`, `Packages`, `Imports`, `ForTest`, `Module`, `GoVersion`, `DepsErrors`.
+- [ ] [P1] Build package graph assembly: `Roots`, `Packages`, `Imports`, `ForTest`, `Module`, `GoVersion`, `DepsErrors`, `Errors`, `TypeErrors`.
 - [ ] [P1] Ensure path normalization and `PWD` anchoring for workspace files.
 - [ ] [P1] Always include `builtin` in responses; handle stdlib and no-match cases.
 - [ ] [P1] Use `/usr/lib/go/src/cmd/go/internal/list/list.go` as behavioral reference, but keep implementation compact (avoid copy-paste if possible).
@@ -95,6 +97,15 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 - [ ] [P2] Document `replace` and `vendor` support limits/behavior.
 - [ ] [P3] Document `go.work` support and constraints.
 
-## Open Questions
+## Resolved Decisions
 
-- [ ] [P1] Load modes: confirm the most frequent `packages.LoadMode` bitmask combinations from `docs/research/traces/` and define mandatory field population per mode.
+- [x] [P1] Load mode target: traces use `mode=32287`; this is the primary parity target for MVP.
+- [x] [P1] Field population policy for `mode=32287`: populate `ID`, `Name`, `PkgPath`, `GoFiles`, plus `CompiledGoFiles`, `Imports`, `ForTest`, `DepsErrors`, `Module`, and `EmbedFiles` when available; use best-effort behavior for unavailable data.
+- [x] [P1] `GoVersion` policy: always return the same `GoVersion` received from `driver.Config`.
+- [x] [P1] Environment mapping policy: use existing `driver.MapEnv` behavior.
+- [x] [P1] Platform precedence: respect client `GOOS`/`GOARCH`, fallback to runtime values if undefined.
+- [x] [P1] Unsupported `LoadMode` bits: do best-effort and log with `log.Println`.
+- [x] [P1] Determinism: response ordering does not need to be stable in runtime; sort in tests for assertions.
+- [x] [P1] Overlay validation: no explicit path validation in P1; use overlays only when files are encountered during analysis.
+- [x] [P1] `Module` field behavior: populate when possible; stdlib (`GOROOT`) packages may not include module info. If parsing fails, fill `Module.Error`.
+- [x] [P1] Error strategy: return partial results and populate package errors in `DriverResponse.Packages[].Errors` or `DriverResponse.Packages[].TypeErrors`.

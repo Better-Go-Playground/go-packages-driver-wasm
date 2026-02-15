@@ -14,7 +14,7 @@ run.sock:
 run.stdio:
 	@go run ./cmd/gopackagesdriver -serve
 
-# Run as go packages driver program that reads arguments from command line and immediately returns result to stdout.
+# Run as regular go packages driver program that reads arguments from command line and immediately returns result to stdout.
 .PHONY: run.yolo
 run.yolo:
 	@go run ./cmd/gopackagesdriver

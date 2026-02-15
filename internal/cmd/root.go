@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 
 	"golang.org/x/tools/go/packages"
@@ -18,6 +19,12 @@ import (
 type Options struct {
 	// RunAsServer controls whether to run the app in server mode.
 	RunAsServer bool
+
+	// SocketPath path to a UNIX socket to listen for incoming connections.
+	//
+	// If not set - server listens to stdio.
+	// Has effect only if RunAsServer.
+	SocketPath string
 
 	// Args is a list of positional arguments.
 	//
@@ -36,7 +43,10 @@ func Main(opts Options) error {
 	}
 
 	if opts.RunAsServer {
-		return startServer(ctx, ver)
+		return startServer(ctx, serverOpts{
+			goVersion:  ver,
+			socketPath: opts.SocketPath,
+		})
 	}
 
 	// If in regular mode - get patterns from args and write a response into stdout.
@@ -78,21 +88,58 @@ func dumpResponse(rsp *packages.DriverResponse) {
 	}
 }
 
-func startServer(ctx context.Context, ver driver.GoVersion) error {
+type serverOpts struct {
+	goVersion  driver.GoVersion
+	socketPath string
+}
+
+func startServer(ctx context.Context, opts serverOpts) error {
+	ver := opts.goVersion
 	log.Printf(
 		"starting driver server (compiler=%s arch=%s goVersion=%d)",
 		ver.Compiler, ver.Arch, ver.GoMinorVersion,
 	)
 
-	conn := fakenet.NewConn("stdio", os.Stdin, os.Stdout)
-	defer conn.Close()
-
-	handlers := map[string]jsonrpc.RequestHandler{
+	listener := jsonrpc.NewListener(map[string]jsonrpc.RequestHandler{
 		"goPackageDriver/query": createHandler(ver),
+	})
+
+	if opts.socketPath == "" {
+		// serve stdio
+		conn := fakenet.NewConn("stdio", os.Stdin, os.Stdout)
+		defer conn.Close()
+		return listener.ServeStream(ctx, conn)
 	}
 
-	listener := jsonrpc.NewListener(handlers)
-	return listener.ServeStream(ctx, conn)
+	log.Printf("listening for socket %q", opts.socketPath)
+	l, err := net.Listen("unix", opts.socketPath)
+	if err != nil {
+		return fmt.Errorf("listen error: %w", err)
+	}
+
+	go func() {
+		<-ctx.Done()
+		l.Close()
+	}()
+
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+
+			return fmt.Errorf("accept error: %w", err)
+		}
+
+		go func() {
+			if err := listener.ServeStream(ctx, conn); err != nil {
+				log.Printf("failed to handle request: %s", err)
+			}
+		}()
+	}
+
+	return nil
 }
 
 func createHandler(ver driver.GoVersion) jsonrpc.RequestHandler {

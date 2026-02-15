@@ -7,7 +7,7 @@ help:
 # Start server and listen UNIX socket
 .PHONY: run.sock
 run.sock:
-	@go run ./cmd/gopackagesdriver -serve -sock "$SOCK_PATH"
+	@go run ./cmd/gopackagesdriver -serve -sock "$(SOCK_PATH)"
 
 # Start server and listen for stdio requests
 .PHONY: run.stdio

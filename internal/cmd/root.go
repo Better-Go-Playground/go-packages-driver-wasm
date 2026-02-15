@@ -26,6 +26,9 @@ type Options struct {
 	// Has effect only if RunAsServer.
 	SocketPath string
 
+	// TraceFile is file to write request traces for debug purposes.
+	TraceFile string
+
 	// Args is a list of positional arguments.
 	//
 	// Used for patterns when not in server mode.
@@ -46,6 +49,7 @@ func Main(opts Options) error {
 		return startServer(ctx, serverOpts{
 			goVersion:  ver,
 			socketPath: opts.SocketPath,
+			traceFile:  opts.TraceFile,
 		})
 	}
 
@@ -114,6 +118,8 @@ func dumpResponse(rsp *packages.DriverResponse) {
 
 type serverOpts struct {
 	goVersion  driver.GoVersion
+	debug      bool
+	traceFile  string
 	socketPath string
 }
 
@@ -124,7 +130,7 @@ func startServer(ctx context.Context, opts serverOpts) error {
 		ver.Compiler, ver.Arch, ver.GoMinorVersion,
 	)
 
-	listener := jsonrpc.NewListener(map[string]jsonrpc.RequestHandler{
+	listener := jsonrpc.NewServeMux(map[string]jsonrpc.RequestHandler{
 		"goPackageDriver/query": createHandler(ver),
 	})
 

@@ -86,13 +86,13 @@ func (rc *requestCanceler) addRequest(reqID int, cancelFn context.CancelFunc) {
 	rc.reqs[reqID] = cancelFn
 }
 
-type Listener struct {
+type ServeMux struct {
 	canceler requestCanceler
 	handlers map[string]RequestHandler
 }
 
-func NewListener(handlers map[string]RequestHandler) *Listener {
-	return &Listener{
+func NewServeMux(handlers map[string]RequestHandler) *ServeMux {
+	return &ServeMux{
 		canceler: requestCanceler{
 			reqs: make(map[int]context.CancelFunc),
 		},
@@ -100,7 +100,8 @@ func NewListener(handlers map[string]RequestHandler) *Listener {
 	}
 }
 
-func (l *Listener) ServeStream(ctx context.Context, conn net.Conn) error {
+// ServeStream handles incoming requests from a given connection.
+func (l *ServeMux) ServeStream(ctx context.Context, conn net.Conn) error {
 	connCtx, cancelFn := context.WithCancel(ctx)
 	defer cancelFn()
 	defer l.canceler.cancelAll()
@@ -143,7 +144,7 @@ func (l *Listener) ServeStream(ctx context.Context, conn net.Conn) error {
 	return nil
 }
 
-func (l *Listener) handleRequest(ctx context.Context, w io.Writer, data []byte) error {
+func (l *ServeMux) handleRequest(ctx context.Context, w io.Writer, data []byte) error {
 	var req Request
 	if err := json.Unmarshal(data, &req); err != nil {
 		return l.serveError(w, 0, NewError(ErrorCodeParseError, err))
@@ -203,7 +204,7 @@ func (l *Listener) handleRequest(ctx context.Context, w io.Writer, data []byte) 
 	return nil
 }
 
-func (l *Listener) handleNotification(req *Request) error {
+func (l *ServeMux) handleNotification(req *Request) error {
 	if req.Method != NotificationCancelRequest {
 		return ErrorCodeMethodNotFound.Errorf(
 			"unsupported notification %q", req.Method,
@@ -227,11 +228,11 @@ func (l *Listener) handleNotification(req *Request) error {
 	return nil
 }
 
-func (l *Listener) serveError(dst io.Writer, reqID int, e *Error) error {
+func (l *ServeMux) serveError(dst io.Writer, reqID int, e *Error) error {
 	return l.serveResponse(dst, e.AsResponse(reqID))
 }
 
-func (l *Listener) serveResponse(dst io.Writer, rsp *Response) error {
+func (l *ServeMux) serveResponse(dst io.Writer, rsp *Response) error {
 	buff := bytes.NewBuffer(make([]byte, 1024))
 
 	// NOTE: responses should be delimited by LF (\n).

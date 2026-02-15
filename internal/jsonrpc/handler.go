@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"runtime/debug"
 	"sync"
 )
 
@@ -87,7 +88,7 @@ func (rc *requestCanceler) addRequest(reqID int, cancelFn context.CancelFunc) {
 }
 
 type Interceptor interface {
-	InterceptRequest(ctx context.Context, req Request, next Interceptor) Response
+	InterceptRequest(ctx context.Context, req Request, next Interceptor) *Response
 }
 
 // rootInterceptor is the final interceptor that maps handler result to RPC response.
@@ -101,10 +102,17 @@ func newRootInterceptor(h RequestHandler) rootInterceptor {
 	}
 }
 
-func (interceptor rootInterceptor) InterceptRequest(ctx context.Context, req Request, _ Interceptor) Response {
-	rsp := Response{
+func (interceptor rootInterceptor) InterceptRequest(ctx context.Context, req Request, _ Interceptor) *Response {
+	rsp := &Response{
 		ID: req.ID,
 	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			rsp.Error = ErrorCodeInternalError.Errorf("panic: %s", r)
+			log.Printf("Panic: %s\n%s", r, debug.Stack())
+		}
+	}()
 
 	out, err := interceptor.handler.HandleRequest(ctx, req.Params)
 	if err != nil {
@@ -206,7 +214,7 @@ func (mux *ServeMux) handleRequest(ctx context.Context, w io.Writer, data []byte
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("Panic: %s", r)
+				log.Printf("Panic: %s\n%s", r, debug.Stack())
 				_ = mux.serveError(w, req.ID, ErrorCodeInternalError.Errorf("%s", r))
 			}
 		}()
@@ -215,11 +223,11 @@ func (mux *ServeMux) handleRequest(ctx context.Context, w io.Writer, data []byte
 		defer mux.canceler.finishRequest(req.ID)
 
 		rsp := mux.callInterceptors(reqCtx, handler, req)
-		if ctx.Err() != nil {
+		if reqCtx.Err() != nil {
 			return
 		}
 
-		if err := mux.serveResponse(w, &rsp); err != nil {
+		if err := mux.serveResponse(w, rsp); err != nil {
 			log.Printf(
 				"failed to respond: %s (reqID=%v method=%q)",
 				err, req.ID, req.Method,
@@ -230,7 +238,7 @@ func (mux *ServeMux) handleRequest(ctx context.Context, w io.Writer, data []byte
 	return nil
 }
 
-func (mux *ServeMux) callInterceptors(ctx context.Context, handler RequestHandler, req Request) Response {
+func (mux *ServeMux) callInterceptors(ctx context.Context, handler RequestHandler, req Request) *Response {
 	// As interceptors are rare and used mostly for debugging, run them only if necessary.
 	root := newRootInterceptor(handler)
 	if mux.interceptor == nil {

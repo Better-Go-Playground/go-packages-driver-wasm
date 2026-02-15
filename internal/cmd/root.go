@@ -141,6 +141,7 @@ func startServer(ctx context.Context, opts serverOpts) error {
 			return err
 		}
 
+		defer tracer.Close()
 		listener.SetInterceptor(tracer)
 	}
 

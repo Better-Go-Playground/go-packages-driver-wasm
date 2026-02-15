@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"os"
 
@@ -14,12 +13,12 @@ import (
 var _ jsonrpc.Interceptor = (*traceInterceptor)(nil)
 
 type traceEvent struct {
-	Request  jsonrpc.Request  `json:"request"`
-	Response jsonrpc.Response `jsonrpc:"response"`
+	Request  jsonrpc.Request   `json:"request"`
+	Response *jsonrpc.Response `json:"response"`
 }
 
 type traceInterceptor struct {
-	dst io.WriteCloser
+	dst *os.File
 }
 
 func newTraceInterceptor(dstFile string) (*traceInterceptor, error) {
@@ -35,14 +34,14 @@ func newTraceInterceptor(dstFile string) (*traceInterceptor, error) {
 }
 
 // InterceptRequest implements [jsonrpc.Interceptor].
-func (t *traceInterceptor) InterceptRequest(ctx context.Context, req jsonrpc.Request, next jsonrpc.Interceptor) jsonrpc.Response {
+func (t *traceInterceptor) InterceptRequest(ctx context.Context, req jsonrpc.Request, next jsonrpc.Interceptor) *jsonrpc.Response {
 	log.Printf("trace.request: m=%q id=%d", req.Method, req.ID)
 	rsp := next.InterceptRequest(ctx, req, nil)
 
 	if rsp.Error != nil {
 		log.Printf("trace.response.error: %q (m=%q id=%d)", rsp.Error.Message, req.Method, req.ID)
 	} else {
-		log.Printf("trace.response.ok: m=%q id=%d", rsp.Error.Message, req.Method, req.ID)
+		log.Printf("trace.response.ok: m=%q id=%d", req.Method, req.ID)
 	}
 
 	err := json.NewEncoder(t.dst).Encode(traceEvent{
@@ -57,5 +56,6 @@ func (t *traceInterceptor) InterceptRequest(ctx context.Context, req jsonrpc.Req
 }
 
 func (t *traceInterceptor) Close() {
+	_ = t.dst.Sync()
 	_ = t.dst.Close()
 }

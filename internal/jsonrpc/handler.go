@@ -40,36 +40,50 @@ func NewHandler[TRequest, TResponse any](fn func(ctx context.Context, req TReque
 }
 
 type requestCanceler struct {
-	m sync.Map
+	lock sync.Mutex
+	reqs map[int]context.CancelFunc
 }
 
 func (rc *requestCanceler) cancelRequest(reqID int) {
-	v, ok := rc.m.LoadAndDelete(reqID)
-	if !ok {
-		return
-	}
+	rc.lock.Lock()
+	defer rc.lock.Unlock()
 
-	cancelFn := v.(context.CancelFunc)
-	cancelFn()
+	cancelFn, ok := rc.reqs[reqID]
+	if ok {
+		delete(rc.reqs, reqID)
+		cancelFn()
+	}
 }
 
 func (rc *requestCanceler) finishRequest(reqID int) bool {
-	_, ok := rc.m.LoadAndDelete(reqID)
+	rc.lock.Lock()
+	defer rc.lock.Unlock()
+
+	_, ok := rc.reqs[reqID]
+	if !ok {
+		return false
+	}
+
+	delete(rc.reqs, reqID)
 	return ok
 }
 
 func (rc *requestCanceler) cancelAll() {
-	rc.m.Range(func(_, v any) bool {
-		cancelFn := v.(context.CancelFunc)
-		cancelFn()
-		return true
-	})
+	rc.lock.Lock()
+	defer rc.lock.Unlock()
 
-	rc.m.Clear()
+	for _, cancelFn := range rc.reqs {
+		cancelFn()
+	}
+
+	rc.reqs = make(map[int]context.CancelFunc)
 }
 
 func (rc *requestCanceler) addRequest(reqID int, cancelFn context.CancelFunc) {
-	rc.m.Store(reqID, cancelFn)
+	rc.lock.Lock()
+	defer rc.lock.Unlock()
+
+	rc.reqs[reqID] = cancelFn
 }
 
 type Listener struct {
@@ -79,6 +93,9 @@ type Listener struct {
 
 func NewListener(handlers map[string]RequestHandler) *Listener {
 	return &Listener{
+		canceler: requestCanceler{
+			reqs: make(map[int]context.CancelFunc),
+		},
 		handlers: handlers,
 	}
 }

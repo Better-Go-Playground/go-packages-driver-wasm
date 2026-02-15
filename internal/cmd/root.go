@@ -56,17 +56,41 @@ func Main(opts Options) error {
 var emptyResponse = &packages.DriverResponse{NotHandled: true}
 
 func runAsCommand(ctx context.Context, ver driver.GoVersion, patterns []string) error {
-	var req packages.DriverRequest
-	err := json.NewDecoder(os.Stdin).Decode(&req)
-	if err != nil {
-		dumpResponse(emptyResponse)
-		return fmt.Errorf("cannot parse request from stdin: %w", err)
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		dumpResponse(emptyResponse)
 		return err
+	}
+
+	type result struct {
+		req packages.DriverRequest
+		err error
+	}
+
+	// Listen for stdin request in background to be able to handle SIGINT
+	ch := make(chan result)
+	defer close(ch)
+	go func() {
+		var req packages.DriverRequest
+		err = json.NewDecoder(os.Stdin).Decode(&req)
+		if ctx.Err() != nil {
+			return
+		}
+
+		ch <- result{err: err, req: req}
+	}()
+
+	var req packages.DriverRequest
+	select {
+	case <-ctx.Done():
+		return nil
+	case r := <-ch:
+		if r.err != nil {
+			dumpResponse(emptyResponse)
+			return fmt.Errorf("cannot parse request from stdin: %w", err)
+		}
+
+		req = r.req
 	}
 
 	cfg := driver.ConfigFromDriverRequest(ver, cwd, req)

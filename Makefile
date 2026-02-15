@@ -2,7 +2,7 @@ SOCK_PATH?=driver.sock
 
 .PHONY: help
 help:
-	echo "TODO"
+	@echo "Usage: make [run.sock | run.stdio | run.yolo]"
 	
 # Start server and listen UNIX socket
 .PHONY: run.sock

@@ -86,9 +86,39 @@ func (rc *requestCanceler) addRequest(reqID int, cancelFn context.CancelFunc) {
 	rc.reqs[reqID] = cancelFn
 }
 
+type Interceptor interface {
+	InterceptRequest(ctx context.Context, req Request, next Interceptor) Response
+}
+
+// rootInterceptor is the final interceptor that maps handler result to RPC response.
+type rootInterceptor struct {
+	handler RequestHandler
+}
+
+func newRootInterceptor(h RequestHandler) rootInterceptor {
+	return rootInterceptor{
+		handler: h,
+	}
+}
+
+func (interceptor rootInterceptor) InterceptRequest(ctx context.Context, req Request, _ Interceptor) Response {
+	rsp := Response{
+		ID: req.ID,
+	}
+
+	out, err := interceptor.handler.HandleRequest(ctx, req.Params)
+	if err != nil {
+		rsp.Error = WrapError(err)
+	}
+
+	rsp.Result = out
+	return rsp
+}
+
 type ServeMux struct {
-	canceler requestCanceler
-	handlers map[string]RequestHandler
+	canceler    requestCanceler
+	handlers    map[string]RequestHandler
+	interceptor Interceptor
 }
 
 func NewServeMux(handlers map[string]RequestHandler) *ServeMux {
@@ -100,11 +130,16 @@ func NewServeMux(handlers map[string]RequestHandler) *ServeMux {
 	}
 }
 
+// SetInterceptor adds request interceptors.
+func (mux *ServeMux) SetInterceptor(interceptor Interceptor) {
+	mux.interceptor = interceptor
+}
+
 // ServeStream handles incoming requests from a given connection.
-func (l *ServeMux) ServeStream(ctx context.Context, conn net.Conn) error {
+func (mux *ServeMux) ServeStream(ctx context.Context, conn net.Conn) error {
 	connCtx, cancelFn := context.WithCancel(ctx)
 	defer cancelFn()
-	defer l.canceler.cancelAll()
+	defer mux.canceler.cancelAll()
 
 	go func() {
 		<-ctx.Done()
@@ -124,7 +159,7 @@ func (l *ServeMux) ServeStream(ctx context.Context, conn net.Conn) error {
 				}
 				continue
 			}
-			if err := l.handleRequest(connCtx, conn, trimmed); err != nil {
+			if err := mux.handleRequest(connCtx, conn, trimmed); err != nil {
 				log.Printf("failed to handle request: %s", err)
 			}
 		}
@@ -144,56 +179,47 @@ func (l *ServeMux) ServeStream(ctx context.Context, conn net.Conn) error {
 	return nil
 }
 
-func (l *ServeMux) handleRequest(ctx context.Context, w io.Writer, data []byte) error {
+func (mux *ServeMux) handleRequest(ctx context.Context, w io.Writer, data []byte) error {
 	var req Request
 	if err := json.Unmarshal(data, &req); err != nil {
-		return l.serveError(w, 0, NewError(ErrorCodeParseError, err))
+		return mux.serveError(w, 0, NewError(ErrorCodeParseError, err))
 	}
 
 	if req.ID == 0 {
-		err := l.handleNotification(&req)
+		err := mux.handleNotification(&req)
 		if err != nil {
-			return l.serveResponse(w, WrapError(err).AsResponse(0))
+			return mux.serveResponse(w, WrapError(err).AsResponse(0))
 		}
 
 		return nil
 	}
 
-	handler, ok := l.handlers[req.Method]
+	handler, ok := mux.handlers[req.Method]
 	if !ok {
 		err := ErrorCodeMethodNotFound.Errorf("method not found: %q", req.Method)
-		return l.serveResponse(w, err.AsResponse(req.ID))
+		return mux.serveResponse(w, err.AsResponse(req.ID))
 	}
 
 	reqCtx, cancelFn := context.WithCancel(ctx)
-	l.canceler.addRequest(req.ID, cancelFn)
+	mux.canceler.addRequest(req.ID, cancelFn)
 
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("Panic: %s", r)
-				_ = l.serveError(w, req.ID, ErrorCodeInternalError.Errorf("%s", r))
+				_ = mux.serveError(w, req.ID, ErrorCodeInternalError.Errorf("%s", r))
 			}
 		}()
 
 		defer cancelFn()
-		defer l.canceler.finishRequest(req.ID)
+		defer mux.canceler.finishRequest(req.ID)
 
-		rsp := &Response{
-			ID: req.ID,
-		}
-
-		out, err := handler.HandleRequest(reqCtx, req.Params)
-		if err != nil {
-			rsp.Error = WrapError(err)
-		}
-
-		rsp.Result = out
+		rsp := mux.callInterceptors(reqCtx, handler, req)
 		if ctx.Err() != nil {
 			return
 		}
 
-		if err := l.serveResponse(w, rsp); err != nil {
+		if err := mux.serveResponse(w, &rsp); err != nil {
 			log.Printf(
 				"failed to respond: %s (reqID=%v method=%q)",
 				err, req.ID, req.Method,
@@ -204,7 +230,17 @@ func (l *ServeMux) handleRequest(ctx context.Context, w io.Writer, data []byte) 
 	return nil
 }
 
-func (l *ServeMux) handleNotification(req *Request) error {
+func (mux *ServeMux) callInterceptors(ctx context.Context, handler RequestHandler, req Request) Response {
+	// As interceptors are rare and used mostly for debugging, run them only if necessary.
+	root := newRootInterceptor(handler)
+	if mux.interceptor == nil {
+		return root.InterceptRequest(ctx, req, nil)
+	}
+
+	return mux.interceptor.InterceptRequest(ctx, req, root)
+}
+
+func (mux *ServeMux) handleNotification(req *Request) error {
 	if req.Method != NotificationCancelRequest {
 		return ErrorCodeMethodNotFound.Errorf(
 			"unsupported notification %q", req.Method,
@@ -224,15 +260,15 @@ func (l *ServeMux) handleNotification(req *Request) error {
 		)
 	}
 
-	l.canceler.cancelRequest(reqID)
+	mux.canceler.cancelRequest(reqID)
 	return nil
 }
 
-func (l *ServeMux) serveError(dst io.Writer, reqID int, e *Error) error {
-	return l.serveResponse(dst, e.AsResponse(reqID))
+func (mux *ServeMux) serveError(dst io.Writer, reqID int, e *Error) error {
+	return mux.serveResponse(dst, e.AsResponse(reqID))
 }
 
-func (l *ServeMux) serveResponse(dst io.Writer, rsp *Response) error {
+func (mux *ServeMux) serveResponse(dst io.Writer, rsp *Response) error {
 	buff := bytes.NewBuffer(make([]byte, 1024))
 
 	// NOTE: responses should be delimited by LF (\n).

@@ -134,6 +134,16 @@ func startServer(ctx context.Context, opts serverOpts) error {
 		"goPackageDriver/query": createHandler(ver),
 	})
 
+	if opts.traceFile != "" {
+		log.Printf("tracing is enabled, file: %q", opts.traceFile)
+		tracer, err := newTraceInterceptor(opts.traceFile)
+		if err != nil {
+			return err
+		}
+
+		listener.SetInterceptor(tracer)
+	}
+
 	if opts.socketPath == "" {
 		// serve stdio
 		conn := fakenet.NewConn("stdio", os.Stdin, os.Stdout)

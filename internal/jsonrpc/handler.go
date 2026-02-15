@@ -130,10 +130,10 @@ func (l *Listener) ServeStream(ctx context.Context, conn net.Conn) error {
 
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				return nil
+				break
 			}
 			if connCtx.Err() != nil {
-				return nil
+				break
 			}
 
 			return fmt.Errorf("connection read failed: %w", err)

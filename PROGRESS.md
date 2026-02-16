@@ -24,6 +24,35 @@
 NOTE: do not run `scripts/ldp-drv*` scripts as they start an interactive neovim session.
 Instead, ask the operator (human) to collect new samples.
 
+### Trace Diff Findings (Baseline vs Custom)
+
+- Comparison used existing artifacts only:
+  - baseline: `logs/rpc-expected.trace.jsonl`
+  - custom: `logs/rpc-got.trace.jsonl`
+  - NOTE respected: no `scripts/ldp-drv*` execution and no new interactive sample capture.
+- Top-level response delta:
+  - baseline: `Roots=9`, `Packages=340`, package entries with `Errors`: `0`
+  - custom: `Roots=7`, `Packages=202`, package entries with `Errors`: `24`
+  - baseline trace has 2 equivalent response entries; custom trace has 1 response entry.
+- Package graph parity delta:
+  - package IDs missing in custom vs baseline: `146` (`102` external-module IDs, `44` stdlib/transitive IDs)
+  - package IDs only in custom vs baseline: `8` (all unresolved `golang.org/x/...` IDs)
+  - `16` overlapping package IDs regress to placeholders in custom (`GoFiles=0`, `Imports=0`, `Errors=[cannot resolve import path ...]`)
+  - placeholder examples: `github.com/jackc/pgx/v5/stdlib`, `github.com/pressly/goose/v3`, `github.com/jackc/pgx/v5/pgxpool`, `github.com/georgysavva/scany/v2/pgxscan`
+- Failure boundary evidence:
+  - workspace package `github.com/x1unix/thoughtly-ticket-booking/internal/booking` is identical in both traces (`GoFiles=4`, `Imports=9`, `Errors=0`)
+  - divergence starts when resolving external dependencies imported by workspace packages.
+- Additional parity gaps observed:
+  - `tests=true` root variants missing in custom:
+    - `github.com/x1unix/thoughtly-ticket-booking/tests [github.com/x1unix/thoughtly-ticket-booking/tests.test]`
+    - `github.com/x1unix/thoughtly-ticket-booking/tests.test`
+  - GOROOT vendored import mapping mismatch:
+    - baseline maps imports like `golang.org/x/net/http/httpguts` to package ID `vendor/golang.org/x/net/http/httpguts`
+    - custom maps same import to ID `golang.org/x/net/http/httpguts`, producing unresolved `golang.org/x/...` placeholders instead of matching `vendor/...` stdlib package IDs.
+- Env propagation sanity check:
+  - both traces carry `GOMOD`, `GOPATH`, `GOROOT`, and `GOMODCACHE=/home/x1unix/go/pkg/mod`
+  - unresolved external imports are therefore consistent with resolver behavior gaps, not missing env values in the request.
+
 ### Investigation Findings (Code-Level)
 
 - `internal/driver/loader.go` currently resolves imports from:
@@ -32,6 +61,7 @@ Instead, ask the operator (human) to collect new samples.
   - `GOPATH/src`
   - `GOROOT/src`
 - It does not yet resolve non-stdlib module dependencies from module cache locations (`GOMODCACHE` or `$GOPATH/pkg/mod`).
+- GOROOT vendored imports (`golang.org/x/...` within stdlib packages) are not canonicalized to `vendor/golang.org/x/...` package IDs, causing additional unresolved stdlib dependency nodes.
 - As a result, imports like `github.com/jackc/pgx/v5/stdlib` fail when not in the main module and not present in `GOPATH/src`, producing package load errors and BrokenImport diagnostics.
 
 ### Investigation And Bugfix Plan
@@ -42,14 +72,16 @@ Instead, ask the operator (human) to collect new samples.
    - derive candidate module path prefixes from import path
    - map module path to version from nearest `go.mod` requirements
    - resolve module root directory in module cache
-4. Add on-demand transitive module requirement loading (parse dependency `go.mod` when needed, with caching).
-5. Add deterministic tests:
+4. Canonicalize stdlib vendored imports so `golang.org/x/...` edges in GOROOT packages resolve to `vendor/golang.org/x/...` package IDs.
+5. Add on-demand transitive module requirement loading (parse dependency `go.mod` when needed, with caching).
+6. Add deterministic tests:
    - resolver unit tests for external module imports
+   - resolver unit tests for GOROOT vendored `golang.org/x/...` import ID mapping
    - integration test that reproduces BrokenImport scenario
    - fixture parity checks against reference traces
-6. Re-run validation:
+7. Re-run validation:
    - `go test ./...`
-   - side-by-side gopls smoke test with standard vs custom driver scripts
+   - side-by-side gopls smoke test with standard vs custom driver scripts (can be done only by human).
 
 ## Snapshot (2026-02-12)
 

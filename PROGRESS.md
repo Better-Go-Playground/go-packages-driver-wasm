@@ -5,7 +5,7 @@
 ### Status
 
 - MVP loader behavior is still in place and covered by current unit tests.
-- Initial high-priority parity bug (module-mode external imports unresolved) is largely fixed; operator traces show major parity improvement with a small remaining delta.
+- High-priority external-import parity bug is fixed in stage-2 operator traces; remaining parity gap is now concentrated in `tests=true` test-variant package modeling.
 
 ### New Bug: External Imports Unresolved In gopls
 
@@ -107,7 +107,7 @@ Instead, ask the operator (human) to collect new samples.
 - Ran: `go test ./...`
 - Result: PASS
 - NOTE respected: no `scripts/ldp-drv*` execution.
-- Pending human validation: side-by-side gopls smoke test trace capture (`scripts/lsp-drv-standard.sh` vs `scripts/lsp-drv-custom.sh`).
+- Human validation completed in later stages (`logs/fix-stage-1`, `logs/fix-stage-2`).
 
 ### Post-Fix Smoke Validation (Operator Traces)
 
@@ -143,8 +143,31 @@ Instead, ask the operator (human) to collect new samples.
 - Validation after follow-up changes:
   - Ran: `go test ./...`
   - Result: PASS
-- Pending human validation:
-  - re-run smoke traces to confirm remaining 5 unresolved imports are eliminated and re-check package graph deltas.
+- Human validation status:
+  - operator re-ran smoke traces in `logs/fix-stage-2` and confirmed the remaining 5 unresolved imports are eliminated.
+
+### Stage-2 Smoke Validation (Operator Traces)
+
+- Operator provided stage-2 artifacts in `logs/fix-stage-2`:
+  - baseline: `logs/fix-stage-2/rpc-expected.trace.jsonl`
+  - custom: `logs/fix-stage-2/rpc-got.trace.jsonl`
+  - NOTE respected: no interactive script execution by agent.
+- Stage-2 parity snapshot:
+  - baseline: `Roots=9`, `Packages=340`, `Errors=0`
+  - custom: `Roots=7`, `Packages=325`, `Errors=0`
+  - baseline-vs-custom package ID delta: `missing=15`, `extra=0`
+- Stage-1 to Stage-2 improvement (`logs/fix-stage-1` -> `logs/fix-stage-2` custom):
+  - packages: `314 -> 325`
+  - package errors: `5 -> 0`
+  - resolved previously failing imports:
+    - `github.com/klauspost/compress/{flate,gzip,zlib}`
+    - `github.com/mattn/go-isatty`
+    - `golang.org/x/sync/semaphore`
+- Remaining delta is now test-variant-related, not external import resolution:
+  - missing roots:
+    - `github.com/x1unix/thoughtly-ticket-booking/tests [github.com/x1unix/thoughtly-ticket-booking/tests.test]`
+    - `github.com/x1unix/thoughtly-ticket-booking/tests.test`
+  - missing package IDs are `tests=true` companion/testdeps graph nodes (for example `go/ast`, `go/parser`, `testing/internal/testdeps`, `runtime/pprof`, `runtime/cgo`, `internal/fuzz`, and several `vendor/golang.org/x/text/...` IDs).
 
 ## Snapshot (2026-02-12)
 

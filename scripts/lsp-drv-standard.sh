@@ -14,3 +14,4 @@ export LSP_LOG_FILE="$DRV_ROOT/logs/gopls.log"
 export LSP_RPC_TRACE="$DRV_ROOT/logs/rpc-expected.trace.jsonl"
 
 cd "$TEST_DIR" && nvim .
+pkill "$GOPLS_BIN"

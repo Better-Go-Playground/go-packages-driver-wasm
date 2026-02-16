@@ -6,7 +6,7 @@
 
 - MVP loader behavior is still in place and covered by current unit tests.
 - External-import parity bug and `tests=true` root parity are fixed; operator stage-5 traces reached package ID parity (`missing=0`, `extra=0`, `Errors=0`).
-- A remaining metadata-shape mismatch was observed in stage-5 (`runtime/cgo` self-import edge in custom) and was fixed in code; awaiting refreshed traces.
+- Stage-6 operator traces confirm the `runtime/cgo` metadata-shape cleanup: package IDs and inspected import edges now match baseline.
 
 ### New Bug: External Imports Unresolved In gopls
 
@@ -286,8 +286,22 @@ Instead, ask the operator (human) to collect new samples.
   - Result: PASS
   - Ran: `go test ./...`
   - Result: PASS
-- Pending human validation:
-  - run smoke harness once more and provide a new trace set (recommended `logs/fix-stage-6`) to confirm stage-5 `runtime/cgo` self-edge metadata mismatch is eliminated.
+- Human validation completed in stage-6 traces (`logs/fix-stage-6`).
+
+### Stage-6 Smoke Validation (Operator Traces)
+
+- Operator provided stage-6 artifacts in `logs/fix-stage-6`:
+  - baseline: `logs/fix-stage-6/rpc-expected.trace.jsonl`
+  - custom: `logs/fix-stage-6/rpc-got.trace.jsonl`
+  - NOTE respected: no interactive script execution by agent.
+- Stage-6 parity snapshot:
+  - baseline: `Roots=9`, `Packages=340`, `Errors=0`
+  - custom: `Roots=9`, `Packages=340`, `Errors=0`
+  - baseline-vs-custom package ID delta: `missing=0`, `extra=0`
+- Runtime/cgo metadata verification:
+  - both baseline and custom include `runtime/cgo`
+  - both now have the same `runtime/cgo` importer set (`net`, `os/user`)
+  - stage-5 custom-only self-edge (`runtime/cgo => runtime/cgo`) is no longer present.
 
 ## Snapshot (2026-02-12)
 

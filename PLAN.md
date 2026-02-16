@@ -4,59 +4,63 @@
 
 ### Goal
 
-Deliver a Go packages driver compatible with gopls, producing outputs that match the "gold" request/response pairs, without spawning external processes (e.g., the `go` toolchain) due to environment constraints.
+Deliver a Go packages driver compatible with gopls, producing outputs that match reference behavior without spawning external processes.
 
 ### Assumptions
 
-- Runtime is Unix-like only; Windows is explicitly out of scope.
-- Overlay paths are absolute.
-- Overlay content consists of Go source files.
-- `GoVersion` is injected by the server layer (`internal/cmd/root.go`).
-- Driver logic should return concrete errors for request-level failures; for per-pattern/package failures return partial results with package-level errors.
-- Driver response should use the same `GoVersion` value from `driver.Config`.
-- Package/file selection should respect request `GOOS`/`GOARCH`, with runtime fallback when undefined.
+- Runtime is Unix-like only; Windows is out of scope.
+- Overlay paths are absolute and overlay content is Go source.
+- `GoVersion` is injected by server layer (`internal/cmd/root.go`).
+- Request-level failures return concrete errors; per-pattern/package failures return partial results with package-level errors.
+- Driver response uses the same `GoVersion` value from `driver.Config`.
+- Package/file selection respects request `GOOS`/`GOARCH`, with runtime fallback.
 
 ## Constraints
 
-- Do **not** call `golang.org/x/tools/go/packages.Load` inside the driver implementation, because it can invoke the `go` command under the hood.
-- Keep the driver execution model single-threaded: avoid spawning multiple goroutines for core loading flow (chunk processing, metadata resolution, and response assembly).
+- Do not call `golang.org/x/tools/go/packages.Load` inside driver implementation.
+- Keep core loading flow single-threaded.
 
 ## Key References
 
-- `docs/reference/driver-requests-responses.md` ("gold" request/response examples from traces)
-- `docs/research/driver-protocol-notes.md` (protocol and gopls behavior)
-- `docs/research/trace-format.md` and `docs/research/trace-analysis.md` (trace shape and analysis)
-- `internal/models/request.go` (`DriverServerRequest` envelope used by the server)
-- `internal/driver/loader.go` (business logic entry point)
+- `docs/reference/driver-requests-responses.md`
+- `docs/research/driver-protocol-notes.md`
+- `docs/import-resolution.md`
+- `internal/models/request.go`
+- Driver implementation entry and internals:
+  - `internal/driver/loader.go`
+  - `internal/driver/loader_runtime.go`
+  - `internal/driver/loader_state.go`
+  - `internal/driver/loader_files.go`
 
 ## Milestones
 
-1. Golden contract and acceptance criteria
-2. Driver core behavior (business logic)
-3. Test/validation and trace parity
-4. Documentation and integration guidance
+1. Golden contract and acceptance criteria - in progress
+2. Driver core behavior (business logic) - mostly complete
+3. Test/validation and trace parity - in progress
+4. Documentation and integration guidance - in progress
 
 ## Implementation Phases
 
 ### Phase 1 (MVP Correctness)
 
-- [ ] Support `GOPATH` and `go.mod` workspaces without `replace`.
-- [ ] Resolve external module imports in module mode via module cache (`GOMODCACHE` or `$GOPATH/pkg/mod`) without invoking `go`.
-- [ ] Prioritize correctness over optimization; no caching/coalescing in this phase.
-- [x] Target the most frequent `packages.LoadMode` bitmask from traces: `32287`.
+- [x] Support `GOPATH` and `go.mod` workspaces without `replace`.
+- [x] Resolve external module imports in module mode via module cache (`GOMODCACHE` or `$GOPATH/pkg/mod`) without invoking `go`.
+- [x] Prioritize correctness over optimization.
+- [x] Target frequent trace load mode `32287`.
 
 ### Phase 2 (Module Extensions)
 
 - [ ] Add `replace` support in `go.mod`.
-- [ ] Add `vendor` mode behavior parity.
+- [ ] Complete full `vendor` mode parity.
+- [x] Canonicalize GOROOT vendored import IDs used by stdlib package graph.
 
 ### Phase 3 (Workspace Extensions)
 
-- [ ] Add `go.work` support and validate parity for workspace resolution.
+- [ ] Add `go.work` support and validate workspace parity.
 
 ## Already Implemented (No Action)
 
-- JSON marshal/unmarshal, transport, and routing in `internal/jsonrpc`.
+- JSON-RPC transport, marshal/unmarshal, and routing in `internal/jsonrpc`.
 - Server/stdio wiring in `internal/cmd/root.go`.
 - Request cancellation in `internal/jsonrpc/handler.go`.
 
@@ -64,64 +68,51 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 
 ### 1) Golden Contract and Acceptance Criteria
 
-- [ ] [P1] Treat `docs/reference/driver-requests-responses.md` as the source of truth for inputs and required outputs.
-- [ ] [P1] Align the request envelope with `internal/models/request.go` (`DriverServerRequest`).
-- [ ] [P1] Document acceptance criteria: "gold" output parity, `builtin` always present, absolute paths anchored to `PWD`, and `NotHandled` semantics.
+- [x] Treat `docs/reference/driver-requests-responses.md` as contract input/output reference.
+- [x] Align request envelope with `internal/models/request.go` (`DriverServerRequest`).
+- [x] Keep `builtin` always present and paths absolute/normalized.
+- [ ] Add automated fixture parity assertions against reference request/response pairs.
 
 ### 2) Driver Core Behavior (internal/driver)
 
-- [ ] [P1] Implement business logic in `internal/driver/loader.go`.
-- [ ] [P1] Implement metadata loading without using `packages.Load` (driver-native package graph construction only).
-- [ ] [P1] Execute loading flow sequentially (single-threaded runtime); no multi-goroutine chunk fan-out.
-- [ ] [P1] Resolve env, build flags, tests, and overlay handling for each request.
-- [ ] [P1] Resolve external imports from module dependencies (outside main module) using module cache + `go.mod` requirement data.
-- [ ] [P1] Implement pattern chunking and response merge semantics (including `NotHandled` propagation).
-- [ ] [P1] Build package graph assembly: `Roots`, `Packages`, `Imports`, `ForTest`, `Module`, `GoVersion`, `DepsErrors`, `Errors`, `TypeErrors`.
-- [ ] [P1] Ensure path normalization and `PWD` anchoring for workspace files.
-- [ ] [P1] Always include `builtin` in responses; handle stdlib and no-match cases.
-- [ ] [P1] Use `/usr/lib/go/src/cmd/go/internal/list/list.go` as behavioral reference, but keep implementation compact (avoid copy-paste if possible).
-
-**Algorithm Outline (Loader.Load)**
-
-1. Build a request-scoped runtime view from `Config`: `Dir`, env map, build flags, tests, overlay, `Mode`, and `GoVersion`.
-2. Normalize incoming patterns: resolve relative patterns against `Config.Dir` and preserve `builtin`.
-3. Chunk patterns to stay within a safe command-line size limit, mirroring gopls behavior.
-4. For each chunk, execute the loader pipeline: resolve module/workspace context and go env values, enumerate packages and file lists, apply overlays, and populate fields required by `Mode` and the gold outputs.
-5. Merge chunk responses: if any chunk is `NotHandled`, return `NotHandled` overall; reconcile imports and roots.
-6. Finalize response: always include `builtin` and ensure absolute paths anchored to `Config.Dir`.
-7. Return a `packages.DriverResponse` that matches the golden outputs.
+- [x] Implement business logic entrypoint in `internal/driver/loader.go`.
+- [x] Build package graph without `packages.Load`.
+- [x] Keep loading sequential (single-threaded).
+- [x] Implement pattern normalization, chunking, and merge flow.
+- [x] Resolve external imports from module cache with `go.mod` requirement mapping.
+- [x] Implement GOROOT vendored import canonicalization.
+- [x] Implement `tests=true` variant roots and synthetic test main wiring.
+- [x] Implement cgo import mapping (`"C" -> "runtime/cgo"`) with self-import guard.
+- [x] Always include `builtin` and handle no-match as package-level errors.
+- [ ] Complete richer metadata parity (`DepsErrors`, `TypeErrors`, module/error shaping details).
 
 ### 3) Test/Validation and Trace Parity
 
-- [ ] [P1] Create fixture tests using "gold" request/response pairs from `docs/reference/driver-requests-responses.md`.
-- [ ] [P1] Add integration tests for overlays, tests=true/false, and workspace patterns (e.g., `./...`, `builtin`).
-- [ ] [P1] Add regression tests for external module imports (for example, `github.com/jackc/pgx/v5/stdlib`, `github.com/pressly/goose/v3`) to prevent BrokenImport diagnostics.
-- [ ] [P1] Compare driver outputs with trace analysis summaries (`docs/research/trace-analysis.md`).
-- [ ] [P2] Add parity tests for `go.mod` `replace` and `vendor`.
-- [ ] [P3] Add parity tests for `go.work` multi-module workspace behavior.
+- [x] Add regression tests for external module import resolution.
+- [x] Add regression tests for vendored import ID mapping behavior.
+- [x] Add regression tests for `tests=true` variant roots and cgo mapping behavior.
+- [x] Validate via operator-collected smoke traces through staged parity fixes (`logs/fix-stage-1` .. `logs/fix-stage-6`).
+- [ ] Add fixture parity tests from `docs/reference/driver-requests-responses.md`.
+- [ ] Add broader integration tests for overlays, `tests=true/false`, recursive patterns, and no-match semantics.
+- [ ] Add parity tests for `replace`, full `vendor` mode, and `go.work`.
 
-## Active Investigation (2026-02-15)
+### 4) Documentation and Integration
 
-- [ ] [P1] Investigate and fix unresolved external imports observed during gopls smoke testing with `/home/x1unix/tmp/book`.
-- [ ] [P1] Diff `logs/rpc-expected.trace.jsonl` and `logs/rpc-got.trace.jsonl` for package graph deltas and missing package metadata.
-- [ ] [P1] Ensure parity for custom-driver diagnostics so external imports are loaded instead of reported as BrokenImport.
+- [x] Document resolver behavior and precedence in `docs/import-resolution.md`.
+- [x] Document bug timeline and closure in `PROGRESS.md`.
+- [ ] Update README with current setup/troubleshooting guidance.
+- [ ] Document unsupported/partial parity areas (`replace`, full `vendor`, `go.work`).
 
-### 4) Documentation and Integration (Non-WASM)
+## Resolved Investigation
 
-- [ ] [P1] Update README with driver setup steps and required env variables.
-- [ ] [P1] Document troubleshooting and expected error modes.
-- [ ] [P2] Document `replace` and `vendor` support limits/behavior.
-- [ ] [P3] Document `go.work` support and constraints.
+- [x] External imports unresolved in gopls (module mode) - fixed.
+- [x] Tests variant roots missing under `tests=true` - fixed.
+- [x] Remaining runtime/cgo metadata mismatch - fixed.
+- [x] Final smoke parity reached in `logs/fix-stage-6` (`missing=0`, `extra=0`, `Errors=0`).
 
-## Resolved Decisions
+## Next Implementation Targets
 
-- [x] [P1] Load mode target: traces use `mode=32287`; this is the primary parity target for MVP.
-- [x] [P1] Field population policy for `mode=32287`: populate `ID`, `Name`, `PkgPath`, `GoFiles`, plus `CompiledGoFiles`, `Imports`, `ForTest`, `DepsErrors`, `Module`, and `EmbedFiles` when available; use best-effort behavior for unavailable data.
-- [x] [P1] `GoVersion` policy: always return the same `GoVersion` received from `driver.Config`.
-- [x] [P1] Environment mapping policy: use existing `driver.MapEnv` behavior.
-- [x] [P1] Platform precedence: respect client `GOOS`/`GOARCH`, fallback to runtime values if undefined.
-- [x] [P1] Unsupported `LoadMode` bits: do best-effort and log with `log.Println`.
-- [x] [P1] Determinism: response ordering does not need to be stable in runtime; sort in tests for assertions.
-- [x] [P1] Overlay validation: no explicit path validation in P1; use overlays only when files are encountered during analysis.
-- [x] [P1] `Module` field behavior: populate when possible; stdlib (`GOROOT`) packages may not include module info. If parsing fails, fill `Module.Error`.
-- [x] [P1] Error strategy: return partial results and populate package errors in `DriverResponse.Packages[].Errors` or `DriverResponse.Packages[].TypeErrors`.
+1. Add golden fixture parity tests from `docs/reference/driver-requests-responses.md`.
+2. Add broader integration tests for recursive patterns and error/no-match semantics.
+3. Improve metadata parity for `DepsErrors`, `TypeErrors`, and module/error shaping.
+4. Implement/document `replace`, full `vendor` mode parity, and `go.work` support.

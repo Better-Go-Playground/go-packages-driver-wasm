@@ -83,6 +83,32 @@ Instead, ask the operator (human) to collect new samples.
    - `go test ./...`
    - side-by-side gopls smoke test with standard vs custom driver scripts (can be done only by human).
 
+### Fix Implementation Progress (This Pass)
+
+- Implemented module-cache-aware import resolution in `internal/driver/loader.go`:
+  - runtime now discovers module cache roots from `GOMODCACHE` with fallback to `$GOPATH/pkg/mod`
+  - import resolver now resolves external module imports via nearest module `go.mod` `require` versions
+  - module cache path resolution uses escaped module path/version (`x/mod/module` escaping)
+- Implemented on-demand dependency `go.mod` parsing with caching:
+  - parsed `require` maps are cached by `go.mod` path
+  - dependency module `go.mod` files are parsed as dependencies are traversed, enabling transitive resolution from dependency imports
+- Implemented GOROOT vendored import canonicalization:
+  - imports like `golang.org/x/net/http/httpguts` from stdlib sources now resolve to `GOROOT/src/vendor/...`
+  - package IDs for these imports now canonicalize to `vendor/golang.org/x/...` instead of unresolved `golang.org/x/...` placeholders
+- Updated module metadata shaping:
+  - module records now preserve `Main` accurately (`true` only for the workspace main module)
+- Added regression coverage in `internal/driver/loader_test.go`:
+  - `TestLoaderResolvesExternalImportsFromGoModCache`
+  - `TestLoaderResolvesTransitiveImportsUsingDependencyGoMod`
+  - `TestResolveImportCanonicalizesGorootVendorID`
+
+### Validation (This Pass)
+
+- Ran: `go test ./...`
+- Result: PASS
+- NOTE respected: no `scripts/ldp-drv*` execution.
+- Pending human validation: side-by-side gopls smoke test trace capture (`scripts/lsp-drv-standard.sh` vs `scripts/lsp-drv-custom.sh`).
+
 ## Snapshot (2026-02-12)
 
 ### Status

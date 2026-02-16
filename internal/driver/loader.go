@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"golang.org/x/mod/modfile"
+	modmodule "golang.org/x/mod/module"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -90,6 +91,7 @@ type moduleInfo struct {
 	Dir       string
 	GoModPath string
 	GoVersion string
+	Main      bool
 }
 
 func (mi *moduleInfo) toPackageModule() *packages.Module {
@@ -99,11 +101,23 @@ func (mi *moduleInfo) toPackageModule() *packages.Module {
 
 	return &packages.Module{
 		Path:      mi.Path,
-		Main:      true,
+		Main:      mi.Main,
 		Dir:       mi.Dir,
 		GoMod:     mi.GoModPath,
 		GoVersion: mi.GoVersion,
 	}
+}
+
+type resolvedImport struct {
+	dir   string
+	pkgID string
+	mod   *packages.Module
+}
+
+type goModSummary struct {
+	modulePath string
+	goVersion  string
+	requires   map[string]string
 }
 
 type loaderRuntime struct {
@@ -119,6 +133,9 @@ type loaderRuntime struct {
 	overlayDir map[string][]string
 
 	moduleCache map[string]*moduleInfo
+	moduleReqs  map[string]map[string]string
+	moduleByRef map[string]*moduleInfo
+	goModCache  []string
 	mainModule  *moduleInfo
 }
 
@@ -169,6 +186,9 @@ func newLoaderRuntime(cfg Config) (*loaderRuntime, error) {
 		overlay:     make(map[string][]byte, len(cfg.Overlay)),
 		overlayDir:  make(map[string][]string, len(cfg.Overlay)),
 		moduleCache: make(map[string]*moduleInfo),
+		moduleReqs:  make(map[string]map[string]string),
+		moduleByRef: make(map[string]*moduleInfo),
+		goModCache:  resolveGoModCacheDirs(cfg.Env, gopath),
 	}
 
 	for inPath, data := range cfg.Overlay {
@@ -187,6 +207,9 @@ func newLoaderRuntime(cfg Config) (*loaderRuntime, error) {
 		log.Printf("driver: failed to parse go.mod from %q: %s", cfg.Dir, err)
 	}
 	rt.mainModule = mainModule
+	if rt.mainModule != nil {
+		rt.mainModule.Main = true
+	}
 
 	return rt, nil
 }
@@ -765,6 +788,14 @@ func (rt *loaderRuntime) resolveImport(importPath, srcDir string) (string, strin
 		}
 	}
 
+	vendored, err := rt.resolveVendoredImport(importPath, srcDir)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if vendored != nil {
+		return vendored.dir, vendored.pkgID, vendored.mod, nil
+	}
+
 	for _, gp := range rt.gopath {
 		if gp == "" {
 			continue
@@ -780,7 +811,246 @@ func (rt *loaderRuntime) resolveImport(importPath, srcDir string) (string, strin
 		return gorootDir, importPath, nil, nil
 	}
 
+	moduleCacheHit, err := rt.resolveModuleCacheImport(importPath, srcDir)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if moduleCacheHit != nil {
+		return moduleCacheHit.dir, moduleCacheHit.pkgID, moduleCacheHit.mod, nil
+	}
+
 	return "", "", nil, fmt.Errorf("cannot resolve import path %q", importPath)
+}
+
+func (rt *loaderRuntime) resolveVendoredImport(importPath, srcDir string) (*resolvedImport, error) {
+	vendorRoot, err := rt.vendorRootForSourceDir(srcDir)
+	if err != nil || vendorRoot == "" {
+		return nil, err
+	}
+
+	vendoredDir := filepath.Join(vendorRoot, "vendor", filepath.FromSlash(importPath))
+	if !dirExists(vendoredDir) {
+		return nil, nil
+	}
+
+	pkgID, mod, err := rt.idFromDir(vendoredDir)
+	if err != nil {
+		return nil, err
+	}
+
+	return &resolvedImport{
+		dir:   vendoredDir,
+		pkgID: pkgID,
+		mod:   mod,
+	}, nil
+}
+
+func (rt *loaderRuntime) vendorRootForSourceDir(srcDir string) (string, error) {
+	if srcDir == "" {
+		return "", nil
+	}
+
+	cleanDir := filepath.Clean(srcDir)
+	gorootSrc := filepath.Join(rt.goroot, "src")
+	if _, ok := relativeToBase(gorootSrc, cleanDir); ok {
+		for curr := cleanDir; ; curr = filepath.Dir(curr) {
+			if _, ok := relativeToBase(gorootSrc, curr); !ok {
+				break
+			}
+			if dirExists(filepath.Join(curr, "vendor")) {
+				return curr, nil
+			}
+			if curr == gorootSrc {
+				break
+			}
+		}
+	}
+
+	return "", nil
+}
+
+func (rt *loaderRuntime) resolveModuleCacheImport(importPath, srcDir string) (*resolvedImport, error) {
+	if len(rt.goModCache) == 0 {
+		return nil, nil
+	}
+
+	currentModule, err := rt.moduleForSourceDir(srcDir)
+	if err != nil || currentModule == nil {
+		return nil, err
+	}
+
+	requires, err := rt.moduleRequirements(currentModule)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, modulePath := range modulePathCandidates(importPath) {
+		version, ok := requires[modulePath]
+		if !ok || version == "" {
+			continue
+		}
+
+		depModule, depErr := rt.moduleFromVersionRef(modulePath, version)
+		if depErr != nil || depModule == nil {
+			continue
+		}
+
+		depDir := depModule.Dir
+		rel := strings.TrimPrefix(importPath, modulePath)
+		rel = strings.TrimPrefix(rel, "/")
+		if rel != "" {
+			depDir = filepath.Join(depDir, filepath.FromSlash(rel))
+		}
+
+		if !dirExists(depDir) {
+			continue
+		}
+
+		return &resolvedImport{
+			dir:   depDir,
+			pkgID: importPath,
+			mod:   depModule.toPackageModule(),
+		}, nil
+	}
+
+	return nil, nil
+}
+
+func (rt *loaderRuntime) moduleForSourceDir(srcDir string) (*moduleInfo, error) {
+	if srcDir != "" {
+		mod, err := rt.moduleForDir(srcDir)
+		if err != nil {
+			return nil, err
+		}
+		if mod != nil {
+			return mod, nil
+		}
+	}
+
+	return rt.mainModule, nil
+}
+
+func (rt *loaderRuntime) moduleRequirements(mod *moduleInfo) (map[string]string, error) {
+	if mod == nil || mod.GoModPath == "" {
+		return nil, nil
+	}
+
+	if cached, ok := rt.moduleReqs[mod.GoModPath]; ok {
+		return cached, nil
+	}
+
+	summary, err := readGoModSummary(mod.GoModPath)
+	if err != nil {
+		return nil, err
+	}
+
+	rt.moduleReqs[mod.GoModPath] = summary.requires
+	return summary.requires, nil
+}
+
+func (rt *loaderRuntime) moduleFromVersionRef(modulePath, version string) (*moduleInfo, error) {
+	if modulePath == "" || version == "" {
+		return nil, nil
+	}
+
+	cacheKey := modulePath + "@" + version
+	if cached, ok := rt.moduleByRef[cacheKey]; ok {
+		return cached, nil
+	}
+
+	escapedPath, err := modmodule.EscapePath(modulePath)
+	if err != nil {
+		return nil, err
+	}
+
+	escapedVersion, err := modmodule.EscapeVersion(version)
+	if err != nil {
+		return nil, err
+	}
+
+	cacheDirName := escapedPath + "@" + escapedVersion
+	for _, root := range rt.goModCache {
+		modDir := filepath.Join(root, cacheDirName)
+		if !dirExists(modDir) {
+			continue
+		}
+
+		goModPath := filepath.Join(modDir, "go.mod")
+		modGoVersion := ""
+		parsedModulePath := modulePath
+		if fileExists(goModPath) {
+			summary, parseErr := readGoModSummary(goModPath)
+			if parseErr == nil {
+				if summary.modulePath != "" {
+					parsedModulePath = summary.modulePath
+				}
+				modGoVersion = summary.goVersion
+				rt.moduleReqs[goModPath] = summary.requires
+			}
+		}
+
+		mi := &moduleInfo{
+			Path:      parsedModulePath,
+			Dir:       modDir,
+			GoModPath: goModPath,
+			GoVersion: modGoVersion,
+			Main:      false,
+		}
+
+		rt.moduleByRef[cacheKey] = mi
+		return mi, nil
+	}
+
+	return nil, nil
+}
+
+func modulePathCandidates(importPath string) []string {
+	if importPath == "" {
+		return nil
+	}
+
+	parts := strings.Split(importPath, "/")
+	out := make([]string, 0, len(parts))
+	for idx := len(parts); idx > 0; idx-- {
+		out = append(out, strings.Join(parts[:idx], "/"))
+	}
+
+	return out
+}
+
+func readGoModSummary(goModPath string) (*goModSummary, error) {
+	data, err := os.ReadFile(goModPath)
+	if err != nil {
+		return nil, err
+	}
+
+	moduleFile, err := modfile.ParseLax(goModPath, data, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if moduleFile.Module == nil || moduleFile.Module.Mod.Path == "" {
+		return nil, fmt.Errorf("go.mod in %q does not declare module path", filepath.Dir(goModPath))
+	}
+
+	moduleGoVersion := ""
+	if moduleFile.Go != nil {
+		moduleGoVersion = moduleFile.Go.Version
+	}
+
+	requires := make(map[string]string, len(moduleFile.Require))
+	for _, req := range moduleFile.Require {
+		if req == nil || req.Mod.Path == "" || req.Mod.Version == "" {
+			continue
+		}
+		requires[req.Mod.Path] = req.Mod.Version
+	}
+
+	return &goModSummary{
+		modulePath: moduleFile.Module.Mod.Path,
+		goVersion:  moduleGoVersion,
+		requires:   requires,
+	}, nil
 }
 
 func (rt *loaderRuntime) idFromDir(dir string) (string, *packages.Module, error) {
@@ -845,31 +1115,19 @@ func (rt *loaderRuntime) moduleForDir(dir string) (*moduleInfo, error) {
 		visited = append(visited, curr)
 		goModPath := filepath.Join(curr, "go.mod")
 		if fileExists(goModPath) {
-			data, err := os.ReadFile(goModPath)
+			summary, err := readGoModSummary(goModPath)
 			if err != nil {
 				return nil, err
-			}
-
-			moduleFile, err := modfile.ParseLax("go.mod", data, nil)
-			if err != nil {
-				return nil, err
-			}
-
-			if moduleFile.Module == nil || moduleFile.Module.Mod.Path == "" {
-				return nil, fmt.Errorf("go.mod in %q does not declare module path", curr)
-			}
-
-			moduleGoVersion := ""
-			if moduleFile.Go != nil {
-				moduleGoVersion = moduleFile.Go.Version
 			}
 
 			mi := &moduleInfo{
-				Path:      moduleFile.Module.Mod.Path,
+				Path:      summary.modulePath,
 				Dir:       curr,
 				GoModPath: goModPath,
-				GoVersion: moduleGoVersion,
+				GoVersion: summary.goVersion,
+				Main:      false,
 			}
+			rt.moduleReqs[goModPath] = summary.requires
 			for _, v := range visited {
 				rt.moduleCache[v] = mi
 			}
@@ -997,6 +1255,44 @@ func splitPathList(pathValue string) []string {
 		out = append(out, filepath.Clean(item))
 	}
 	return out
+}
+
+func resolveGoModCacheDirs(env map[string]string, gopath []string) []string {
+	caches := make([]string, 0, len(gopath)+2)
+
+	if gomodcache := filepath.Clean(env["GOMODCACHE"]); gomodcache != "" && gomodcache != "." {
+		caches = append(caches, gomodcache)
+	}
+
+	if gomodcache := filepath.Clean(os.Getenv("GOMODCACHE")); gomodcache != "" && gomodcache != "." {
+		caches = append(caches, gomodcache)
+	}
+
+	for _, gp := range gopath {
+		if gp == "" {
+			continue
+		}
+		caches = append(caches, filepath.Join(gp, "pkg", "mod"))
+	}
+
+	if len(caches) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(caches))
+	unique := make([]string, 0, len(caches))
+	for _, dir := range caches {
+		if dir == "" {
+			continue
+		}
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		unique = append(unique, dir)
+	}
+
+	return unique
 }
 
 func keysSorted[T any](m map[string]T) []string {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	modmodule "golang.org/x/mod/module"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -190,6 +191,141 @@ func TestLoaderOverlayOverridesImports(t *testing.T) {
 	}
 }
 
+func TestLoaderResolvesExternalImportsFromGoModCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	modCacheDir := filepath.Join(tmpDir, "modcache")
+
+	writeFile(t, filepath.Join(workspaceDir, "go.mod"), "module example.com/app\n\ngo 1.25.0\n\nrequire example.com/dep/v2 v2.0.1\n")
+	writeFile(t, filepath.Join(workspaceDir, "main.go"), "package app\n\nimport _ \"example.com/dep/v2/subpkg\"\n")
+
+	depRoot := filepath.Join(modCacheDir, moduleCachePath(t, "example.com/dep/v2", "v2.0.1"))
+	writeFile(t, filepath.Join(depRoot, "go.mod"), "module example.com/dep/v2\n\ngo 1.25.0\n")
+	writeFile(t, filepath.Join(depRoot, "subpkg", "subpkg.go"), "package subpkg\n\nfunc Name() string { return \"dep\" }\n")
+
+	cfg := Config{
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps,
+		Dir: workspaceDir,
+		Env: map[string]string{
+			"GOOS":       runtime.GOOS,
+			"GOARCH":     runtime.GOARCH,
+			"GOROOT":     runtime.GOROOT(),
+			"GOMODCACHE": modCacheDir,
+		},
+	}
+
+	rsp, err := NewLoader(cfg).Load(context.Background(), []string{"."})
+	if err != nil {
+		t.Fatalf("Load failed: %s", err)
+	}
+
+	byID := make(map[string]*packages.Package, len(rsp.Packages))
+	for _, pkg := range rsp.Packages {
+		byID[pkg.ID] = pkg
+	}
+
+	depPkg := byID["example.com/dep/v2/subpkg"]
+	if depPkg == nil {
+		t.Fatalf("missing package loaded from module cache")
+	}
+	if len(depPkg.GoFiles) == 0 {
+		t.Fatalf("module cache package should have GoFiles")
+	}
+	if len(depPkg.Errors) > 0 {
+		t.Fatalf("unexpected package errors: %+v", depPkg.Errors)
+	}
+}
+
+func TestLoaderResolvesTransitiveImportsUsingDependencyGoMod(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	modCacheDir := filepath.Join(tmpDir, "modcache")
+
+	writeFile(t, filepath.Join(workspaceDir, "go.mod"), "module example.com/app\n\ngo 1.25.0\n\nrequire example.com/dep/v2 v2.0.1\n")
+	writeFile(t, filepath.Join(workspaceDir, "main.go"), "package app\n\nimport _ \"example.com/dep/v2/subpkg\"\n")
+
+	depRoot := filepath.Join(modCacheDir, moduleCachePath(t, "example.com/dep/v2", "v2.0.1"))
+	writeFile(t, filepath.Join(depRoot, "go.mod"), "module example.com/dep/v2\n\ngo 1.25.0\n\nrequire example.com/leaf v1.4.0\n")
+	writeFile(t, filepath.Join(depRoot, "subpkg", "subpkg.go"), "package subpkg\n\nimport _ \"example.com/leaf/pkg\"\n")
+
+	leafRoot := filepath.Join(modCacheDir, moduleCachePath(t, "example.com/leaf", "v1.4.0"))
+	writeFile(t, filepath.Join(leafRoot, "go.mod"), "module example.com/leaf\n\ngo 1.25.0\n")
+	writeFile(t, filepath.Join(leafRoot, "pkg", "pkg.go"), "package pkg\n\nfunc Value() string { return \"leaf\" }\n")
+
+	cfg := Config{
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps,
+		Dir: workspaceDir,
+		Env: map[string]string{
+			"GOOS":       runtime.GOOS,
+			"GOARCH":     runtime.GOARCH,
+			"GOROOT":     runtime.GOROOT(),
+			"GOMODCACHE": modCacheDir,
+		},
+	}
+
+	rsp, err := NewLoader(cfg).Load(context.Background(), []string{"."})
+	if err != nil {
+		t.Fatalf("Load failed: %s", err)
+	}
+
+	byID := make(map[string]*packages.Package, len(rsp.Packages))
+	for _, pkg := range rsp.Packages {
+		byID[pkg.ID] = pkg
+	}
+
+	leafPkg := byID["example.com/leaf/pkg"]
+	if leafPkg == nil {
+		t.Fatalf("missing transitive module package")
+	}
+	if len(leafPkg.GoFiles) == 0 {
+		t.Fatalf("transitive module package should have GoFiles")
+	}
+	if len(leafPkg.Errors) > 0 {
+		t.Fatalf("unexpected transitive package errors: %+v", leafPkg.Errors)
+	}
+}
+
+func TestResolveImportCanonicalizesGorootVendorID(t *testing.T) {
+	vendorDir := filepath.Join(runtime.GOROOT(), "src", "vendor", "golang.org", "x", "net", "http", "httpguts")
+	if !dirExists(vendorDir) {
+		t.Skip("GOROOT vendor package not available in current toolchain")
+	}
+
+	rt, err := newLoaderRuntime(Config{
+		Dir: t.TempDir(),
+		Env: map[string]string{
+			"GOOS":   runtime.GOOS,
+			"GOARCH": runtime.GOARCH,
+			"GOROOT": runtime.GOROOT(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("newLoaderRuntime failed: %s", err)
+	}
+
+	resolvedDir, pkgID, _, err := rt.resolveImport(
+		"golang.org/x/net/http/httpguts",
+		filepath.Join(runtime.GOROOT(), "src", "net", "http"),
+	)
+	if err != nil {
+		t.Fatalf("resolveImport failed: %s", err)
+	}
+	if pkgID != "vendor/golang.org/x/net/http/httpguts" {
+		t.Fatalf("unexpected vendored package ID: got %q", pkgID)
+	}
+	if resolvedDir != vendorDir {
+		t.Fatalf("unexpected vendored package dir: got %q want %q", resolvedDir, vendorDir)
+	}
+}
+
 func writeFile(t *testing.T, filePath, content string) {
 	t.Helper()
 
@@ -204,4 +340,20 @@ func writeFile(t *testing.T, filePath, content string) {
 func hasKey[V any](m map[string]V, key string) bool {
 	_, ok := m[key]
 	return ok
+}
+
+func moduleCachePath(t *testing.T, modulePath, version string) string {
+	t.Helper()
+
+	escapedPath, err := modmodule.EscapePath(modulePath)
+	if err != nil {
+		t.Fatalf("EscapePath failed: %s", err)
+	}
+
+	escapedVersion, err := modmodule.EscapeVersion(version)
+	if err != nil {
+		t.Fatalf("EscapeVersion failed: %s", err)
+	}
+
+	return escapedPath + "@" + escapedVersion
 }

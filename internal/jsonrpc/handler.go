@@ -127,6 +127,7 @@ type ServeMux struct {
 	canceler    requestCanceler
 	handlers    map[string]RequestHandler
 	interceptor Interceptor
+	p           sync.Pool
 }
 
 func NewServeMux(handlers map[string]RequestHandler) *ServeMux {
@@ -135,6 +136,11 @@ func NewServeMux(handlers map[string]RequestHandler) *ServeMux {
 			reqs: make(map[int]context.CancelFunc),
 		},
 		handlers: handlers,
+		p: sync.Pool{
+			New: func() any {
+				return bytes.NewBuffer(make([]byte, 0, 2048))
+			},
+		},
 	}
 }
 
@@ -277,7 +283,12 @@ func (mux *ServeMux) serveError(dst io.Writer, reqID int, e *Error) error {
 }
 
 func (mux *ServeMux) serveResponse(dst io.Writer, rsp *Response) error {
-	buff := bytes.NewBuffer(make([]byte, 0, 1024))
+	buff := mux.p.Get().(*bytes.Buffer)
+	defer func() {
+		// TODO: handle overgrown slices
+		buff.Reset()
+		mux.p.Put(buff)
+	}()
 
 	// NOTE: responses should be delimited by LF (\n).
 	if err := json.NewEncoder(buff).Encode(rsp); err != nil {

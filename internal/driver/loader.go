@@ -599,9 +599,14 @@ func (st *loaderState) loadResolvedDir(ctx context.Context, dir, pkgID string, m
 
 	if st.rt.wantsImports() {
 		pkg.Imports = make(map[string]*packages.Package, len(meta.imports))
-		for _, importPath := range meta.imports {
-			if importPath == "C" {
-				continue
+		for _, rawImportPath := range meta.imports {
+			importPath := rawImportPath
+			if rawImportPath == "C" {
+				if st.rt.buildCtx.CgoEnabled {
+					importPath = "runtime/cgo"
+				} else {
+					continue
+				}
 			}
 
 			importID := importPath

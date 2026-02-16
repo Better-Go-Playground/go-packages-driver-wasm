@@ -485,6 +485,53 @@ func TestNewLoaderRuntimeRespectsCGOEnabledEnv(t *testing.T) {
 	}
 }
 
+func TestLoaderMapsCgoImportToRuntimeCgo(t *testing.T) {
+	runtimeCgoDir := filepath.Join(runtime.GOROOT(), "src", "runtime", "cgo")
+	if !dirExists(runtimeCgoDir) {
+		t.Skip("runtime/cgo package not available in current toolchain")
+	}
+
+	tmpDir := t.TempDir()
+	writeFile(t, filepath.Join(tmpDir, "go.mod"), "module example.com/cgomod\n\ngo 1.25.0\n")
+	writeFile(t, filepath.Join(tmpDir, "cgofile.go"), "package cgomod\n\nimport \"C\"\n\nfunc Value() int { return 1 }\n")
+
+	cfg := Config{
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps,
+		Dir: tmpDir,
+		Env: map[string]string{
+			"GOOS":        runtime.GOOS,
+			"GOARCH":      runtime.GOARCH,
+			"GOROOT":      runtime.GOROOT(),
+			"CGO_ENABLED": "1",
+		},
+	}
+
+	rsp, err := NewLoader(cfg).Load(context.Background(), []string{"."})
+	if err != nil {
+		t.Fatalf("Load failed: %s", err)
+	}
+
+	byID := make(map[string]*packages.Package, len(rsp.Packages))
+	for _, pkg := range rsp.Packages {
+		byID[pkg.ID] = pkg
+	}
+
+	rootPkg := byID["example.com/cgomod"]
+	if rootPkg == nil {
+		t.Fatalf("missing root package")
+	}
+	if !hasKey(rootPkg.Imports, "runtime/cgo") {
+		t.Fatalf("expected runtime/cgo import mapping, got imports: %+v", rootPkg.Imports)
+	}
+	if !hasKey(byID, "runtime/cgo") {
+		t.Fatalf("runtime/cgo package should be loaded")
+	}
+}
+
 func TestLoaderTestsModeAddsTestVariantRoots(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeFile(t, filepath.Join(tmpDir, "go.mod"), "module example.com/app\n\ngo 1.25.0\n")

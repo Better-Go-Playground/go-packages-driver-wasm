@@ -5,7 +5,7 @@
 ### Status
 
 - MVP loader behavior is still in place and covered by current unit tests.
-- External-import parity bug is fixed and `tests=true` roots are now present in operator stage-3 traces; remaining parity gap is down to 5 stdlib/vendor IDs.
+- External-import parity bug is fixed and `tests=true` roots are now present; operator stage-4 traces reduced parity delta to 1 remaining package ID (`runtime/cgo`).
 
 ### New Bug: External Imports Unresolved In gopls
 
@@ -228,8 +228,37 @@ Instead, ask the operator (human) to collect new samples.
   - Result: PASS
   - Ran: `go test ./...`
   - Result: PASS
+- Human validation completed in stage-4 traces (`logs/fix-stage-4`).
+
+### Stage-4 Smoke Validation (Operator Traces)
+
+- Operator provided stage-4 artifacts in `logs/fix-stage-4`:
+  - baseline: `logs/fix-stage-4/rpc-expected.trace.jsonl`
+  - custom: `logs/fix-stage-4/rpc-got.trace.jsonl`
+  - NOTE respected: no interactive script execution by agent.
+- Stage-4 parity snapshot:
+  - baseline: `Roots=9`, `Packages=340`, `Errors=0`
+  - custom: `Roots=9`, `Packages=339`, `Errors=0`
+  - baseline-vs-custom package ID delta: `missing=1`, `extra=0`
+- Confirmed fixed from stage-3 residual list:
+  - `vendor/golang.org/x/text/{secure/bidirule,transform,unicode/bidi,unicode/norm}` now present in custom and aligned with baseline
+- Remaining gap in stage-4 custom:
+  - `runtime/cgo` (only missing package ID)
+
+### Runtime/cgo Final Fix Progress (Current Pass)
+
+- Implemented cgo import normalization in `internal/driver/loader.go`:
+  - imports parsed as `"C"` now map to `runtime/cgo` when `CGO_ENABLED=1`
+  - keeps current behavior of skipping `"C"` import when cgo is disabled
+- Added regression coverage in `internal/driver/loader_test.go`:
+  - `TestLoaderMapsCgoImportToRuntimeCgo`
+- Validation:
+  - Ran: `go test ./internal/driver`
+  - Result: PASS
+  - Ran: `go test ./...`
+  - Result: PASS
 - Pending human validation:
-  - run smoke harness again and provide a new trace set (recommended `logs/fix-stage-4`) to confirm stage-3 remaining 5 package IDs are eliminated.
+  - run smoke harness once more and provide a new trace set (recommended `logs/fix-stage-5`) to confirm the final `runtime/cgo` delta is eliminated.
 
 ## Snapshot (2026-02-12)
 

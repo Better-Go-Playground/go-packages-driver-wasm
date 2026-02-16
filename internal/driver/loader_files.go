@@ -820,8 +820,8 @@ func normalizePatterns(workDir string, patterns []string) []string {
 			continue
 		}
 
-		if strings.HasPrefix(p, "file=") {
-			target := strings.TrimPrefix(p, "file=")
+		if after, ok := strings.CutPrefix(p, "file="); ok {
+			target := after
 			out = append(out, "file="+normalizeAbsolutePath(workDir, target))
 			continue
 		}
@@ -831,8 +831,8 @@ func normalizePatterns(workDir string, patterns []string) []string {
 			continue
 		}
 
-		if strings.HasSuffix(p, "/...") {
-			base := strings.TrimSuffix(p, "/...")
+		if before, ok := strings.CutSuffix(p, "/..."); ok {
+			base := before
 			if base == "" || base == "." {
 				base = workDir
 			}
@@ -975,55 +975,4 @@ func resolveGoModCacheDirs(env map[string]string, gopath []string) []string {
 	}
 
 	return unique
-}
-
-func keysSorted[T any](m map[string]T) []string {
-	out := make([]string, 0, len(m))
-	for key := range m {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func uniqueStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-
-	sort.Strings(in)
-
-	out := make([]string, 0, len(in))
-	var prev string
-	for i, item := range in {
-		if i == 0 || item != prev {
-			out = append(out, item)
-			prev = item
-		}
-	}
-	return out
-}
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
-func relativeToBase(baseDir, target string) (string, bool) {
-	rel, err := filepath.Rel(baseDir, target)
-	if err != nil {
-		return "", false
-	}
-	if rel == "." {
-		return ".", true
-	}
-	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
-		return "", false
-	}
-	return rel, true
 }

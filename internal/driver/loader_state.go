@@ -60,8 +60,8 @@ func (st *loaderState) loadPattern(ctx context.Context, pattern string) []string
 		return []string{pkg.ID}
 	}
 
-	if strings.HasPrefix(pattern, "file=") {
-		fileName := normalizeAbsolutePath(st.rt.cfg.Dir, strings.TrimPrefix(pattern, "file="))
+	if after, ok := strings.CutPrefix(pattern, "file="); ok {
+		fileName := normalizeAbsolutePath(st.rt.cfg.Dir, after)
 		pkg, err := st.loadByDir(ctx, filepath.Dir(fileName))
 		if err != nil {
 			return []string{st.addErrorPackage(pattern, err).ID}

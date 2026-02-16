@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"fmt"
 	"go/build"
 	"log"
 	"os"
@@ -86,7 +87,7 @@ func newLoaderRuntime(cfg Config) (*loaderRuntime, error) {
 
 	goroot := cfg.Env["GOROOT"]
 	if goroot == "" {
-		goroot = runtime.GOROOT()
+		return nil, fmt.Errorf("GOROOT is not defined")
 	}
 	goroot = filepath.Clean(goroot)
 

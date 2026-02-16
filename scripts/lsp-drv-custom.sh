@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-DRV_ROOT="$PWD"
+DRV_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 if [ -z "$TEST_DIR" ]; then
   echo "Error: missing test repo dir. Set TEST_DIR env var"
@@ -12,5 +12,7 @@ export GOPLS_BIN=gopls-devel
 export GOPACKAGESDRIVER=pipetransport
 export GOPACKAGESDRIVERADDR="unix:$DRV_ROOT/driver.sock"
 
-export LSP_LOG_FILE="$DRV_ROOT/logs/lsp-custom.log"
-export LSP_RPC_TRACE="$DRV_ROOT/logs/rpc-trace.received.jsonl"
+export LSP_LOG_FILE="$DRV_ROOT/logs/gopls.log"
+export LSP_RPC_TRACE="$DRV_ROOT/logs/rpc-got.trace.jsonl"
+
+cd "$TEST_DIR" && nvim .

@@ -9,7 +9,12 @@
 
 **Project Structure (Internal Focus)**
 
-- `internal/driver/` driver business logic (`loader.go`, `config.go`, `runtime.go`).
+- `internal/driver/` driver business logic:
+  - `loader.go` (public entrypoint)
+  - `loader_runtime.go` (runtime/env setup)
+  - `loader_state.go` (load state machine and response assembly)
+  - `loader_files.go` (resolver, module cache, metadata parsing, helpers)
+  - `config.go`, `runtime.go`
 - `internal/models/` request envelope types (`request.go`).
 - `internal/jsonrpc/` JSON-RPC transport, request handling, and cancellation.
 - `internal/cmd/` app entry, stdio/server wiring (`root.go`, `ctx_*`).
@@ -22,6 +27,12 @@
 
 - `PLAN.md` — canonical implementation plan, milestones, and acceptance criteria.
 - `PROGRESS.md` — current snapshot of completed work, validation status, and next targets.
+- `docs/import-resolution.md` — canonical import resolver behavior and precedence guide.
+
+**Current Focus**
+
+- External import parity bug investigation is closed (validated in `logs/fix-stage-6`).
+- Current work is parity hardening: fixture tests, broader integration tests, and remaining `replace`/full `vendor`/`go.work` behavior.
 
 **Research Docs (start here)**
 

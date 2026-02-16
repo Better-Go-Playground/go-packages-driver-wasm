@@ -9,8 +9,6 @@ fi
 # Open neovim with gopls server using standard transport.
 # Script used to collect "expected" data.
 export GOPLS_BIN=gopls-devel
-export GOPACKAGESDRIVER=pipetransport
-export GOPACKAGESDRIVERADDR="unix:$DRV_ROOT/driver.sock"
 
 export LSP_LOG_FILE="$DRV_ROOT/logs/lsp-standard.log"
 export LSP_RPC_TRACE="$DRV_ROOT/logs/rpc-trace.expected.jsonl"

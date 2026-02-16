@@ -4,7 +4,17 @@ This repo contains an alternative Go packages driver for [gopls](https://github.
 
 Goal is to provide a portable driver that can work in WASM and browser environments.
 
-**Project is at early stage of development. Work in progress**
+## Current status
+
+Project is at early stage of development. Work in progress.
+
+Resolver support status:
+
+- [x] Stdlib
+- [x] GOMODCACHE
+- [ ] `replace` in `go.mod`
+- [ ] `vendor/` directory
+- [ ] `go.work` monorepos
 
 ## Differences
 

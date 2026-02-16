@@ -41,6 +41,7 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 ### Phase 1 (MVP Correctness)
 
 - [ ] Support `GOPATH` and `go.mod` workspaces without `replace`.
+- [ ] Resolve external module imports in module mode via module cache (`GOMODCACHE` or `$GOPATH/pkg/mod`) without invoking `go`.
 - [ ] Prioritize correctness over optimization; no caching/coalescing in this phase.
 - [x] Target the most frequent `packages.LoadMode` bitmask from traces: `32287`.
 
@@ -73,6 +74,7 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 - [ ] [P1] Implement metadata loading without using `packages.Load` (driver-native package graph construction only).
 - [ ] [P1] Execute loading flow sequentially (single-threaded runtime); no multi-goroutine chunk fan-out.
 - [ ] [P1] Resolve env, build flags, tests, and overlay handling for each request.
+- [ ] [P1] Resolve external imports from module dependencies (outside main module) using module cache + `go.mod` requirement data.
 - [ ] [P1] Implement pattern chunking and response merge semantics (including `NotHandled` propagation).
 - [ ] [P1] Build package graph assembly: `Roots`, `Packages`, `Imports`, `ForTest`, `Module`, `GoVersion`, `DepsErrors`, `Errors`, `TypeErrors`.
 - [ ] [P1] Ensure path normalization and `PWD` anchoring for workspace files.
@@ -93,9 +95,16 @@ Deliver a Go packages driver compatible with gopls, producing outputs that match
 
 - [ ] [P1] Create fixture tests using "gold" request/response pairs from `docs/reference/driver-requests-responses.md`.
 - [ ] [P1] Add integration tests for overlays, tests=true/false, and workspace patterns (e.g., `./...`, `builtin`).
+- [ ] [P1] Add regression tests for external module imports (for example, `github.com/jackc/pgx/v5/stdlib`, `github.com/pressly/goose/v3`) to prevent BrokenImport diagnostics.
 - [ ] [P1] Compare driver outputs with trace analysis summaries (`docs/research/trace-analysis.md`).
 - [ ] [P2] Add parity tests for `go.mod` `replace` and `vendor`.
 - [ ] [P3] Add parity tests for `go.work` multi-module workspace behavior.
+
+## Active Investigation (2026-02-15)
+
+- [ ] [P1] Investigate and fix unresolved external imports observed during gopls smoke testing with `/home/x1unix/tmp/book`.
+- [ ] [P1] Diff `logs/rpc-expected.trace.jsonl` and `logs/rpc-got.trace.jsonl` for package graph deltas and missing package metadata.
+- [ ] [P1] Ensure parity for custom-driver diagnostics so external imports are loaded instead of reported as BrokenImport.
 
 ### 4) Documentation and Integration (Non-WASM)
 

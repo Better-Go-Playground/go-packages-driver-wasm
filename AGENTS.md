@@ -2,7 +2,7 @@
 
 **Project Summary**
 
-- This repo is an alternative Go packages driver for the gopls WebAssembly port, aimed at working in WASM and browser environments.
+- This repo is an alternative Go packages driver for the gopls Go language server, aimed at working in constrained environments, where external process execution is not possible.
 - The driver avoids spawning external processes and uses a custom RPC extension to pass patterns and environment data.
 - See `internal/models/request.go` for the driver request envelope type.
 
@@ -16,6 +16,11 @@
 - `cmd/` CLI entry points that invoke `internal/cmd`.
 - `docs/reference/` golden request/response pairs.
 - `docs/research/` traces and protocol research notes.
+
+**Working Docs**
+
+- `PLAN.md` — canonical implementation plan, milestones, and acceptance criteria.
+- `PROGRESS.md` — current snapshot of completed work, validation status, and next targets.
 
 **Research Docs (start here)**
 

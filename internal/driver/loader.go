@@ -265,6 +265,9 @@ func (st *loaderState) loadChunk(ctx context.Context, patterns []string) error {
 		rootIDs := st.loadPattern(ctx, pattern)
 		for _, id := range rootIDs {
 			st.roots[id] = struct{}{}
+			for _, testRootID := range st.loadTestVariants(ctx, id) {
+				st.roots[testRootID] = struct{}{}
+			}
 		}
 	}
 
@@ -407,6 +410,117 @@ func (st *loaderState) ensureBuiltin(ctx context.Context) error {
 	return ctx.Err()
 }
 
+type testVariantIDs struct {
+	variantID string
+	testMain  string
+}
+
+func newTestVariantIDs(rootID string) testVariantIDs {
+	return testVariantIDs{
+		variantID: rootID + " [" + rootID + ".test]",
+		testMain:  rootID + ".test",
+	}
+}
+
+func (st *loaderState) loadTestVariants(ctx context.Context, rootID string) []string {
+	if !st.rt.cfg.Tests || st.rt.mode&packages.NeedForTest == 0 {
+		return nil
+	}
+
+	if rootID == "builtin" || isTestVariantID(rootID) || strings.HasSuffix(rootID, ".test") {
+		return nil
+	}
+
+	rootPkg := st.packages[rootID]
+	if rootPkg == nil || len(rootPkg.Errors) > 0 {
+		return nil
+	}
+
+	rootDir, err := st.packageDir(rootPkg)
+	if err != nil || rootDir == "" {
+		return nil
+	}
+
+	if !st.rt.hasTestCandidates(rootDir) {
+		return nil
+	}
+
+	ids := newTestVariantIDs(rootID)
+	variantPkg, err := st.loadResolvedDir(ctx, rootDir, ids.variantID, rootPkg.Module)
+	if err != nil || variantPkg == nil || len(variantPkg.Errors) > 0 {
+		return nil
+	}
+
+	st.addTestMainPackage(ctx, rootPkg, ids)
+
+	return []string{ids.variantID, ids.testMain}
+}
+
+func (st *loaderState) packageDir(pkg *packages.Package) (string, error) {
+	if pkg == nil {
+		return "", errors.New("package is nil")
+	}
+
+	if pkg.Dir != "" {
+		return pkg.Dir, nil
+	}
+
+	importPath := packagePathForID(pkg.ID)
+	dir, _, _, err := st.rt.resolveImport(importPath, st.rt.cfg.Dir)
+	if err != nil {
+		return "", err
+	}
+
+	return dir, nil
+}
+
+func (st *loaderState) addTestMainPackage(ctx context.Context, rootPkg *packages.Package, ids testVariantIDs) {
+	if _, ok := st.packages[ids.testMain]; ok {
+		return
+	}
+
+	testMainPkg := &packages.Package{
+		ID:      ids.testMain,
+		PkgPath: ids.testMain,
+	}
+	if st.rt.wantsName() {
+		testMainPkg.Name = "main"
+	}
+
+	testMainFile := st.rt.syntheticTestMainPath(ids.testMain)
+	if st.rt.wantsFiles() {
+		testMainPkg.GoFiles = []string{testMainFile}
+	}
+	if st.rt.wantsCompiledGoFiles() {
+		testMainPkg.CompiledGoFiles = []string{testMainFile}
+	}
+
+	if st.rt.wantsImports() {
+		testMainPkg.Imports = make(map[string]*packages.Package, 5)
+
+		rootImportPath := rootPkg.PkgPath
+		if rootImportPath == "" {
+			rootImportPath = packagePathForID(rootPkg.ID)
+		}
+		testMainPkg.Imports[rootImportPath] = &packages.Package{ID: ids.variantID}
+
+		for _, importPath := range []string{"os", "reflect", "testing", "testing/internal/testdeps"} {
+			importID := importPath
+			if st.rt.wantsDeps() {
+				depPkg, depErr := st.loadByImport(ctx, importPath, rootPkg.Dir)
+				if depErr != nil {
+					depPkg = st.addErrorPackage(importPath, depErr)
+				}
+				importID = depPkg.ID
+			}
+
+			testMainPkg.Imports[importPath] = &packages.Package{ID: importID}
+		}
+	}
+
+	st.packages[ids.testMain] = testMainPkg
+}
+
 func (st *loaderState) loadByImport(ctx context.Context, importPath, srcDir string) (*packages.Package, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -447,19 +561,20 @@ func (st *loaderState) loadResolvedDir(ctx context.Context, dir, pkgID string, m
 		return st.packages[pkgID], nil
 	}
 
+	pkgPath := packagePathForID(pkgID)
 	pkg := &packages.Package{
 		ID:      pkgID,
-		PkgPath: pkgID,
+		PkgPath: pkgPath,
 	}
 	if st.rt.wantsName() {
-		pkg.Name = path.Base(pkgID)
+		pkg.Name = path.Base(pkgPath)
 	}
 
 	st.packages[pkgID] = pkg
 	st.loading[pkgID] = struct{}{}
 	defer delete(st.loading, pkgID)
 
-	meta, err := st.rt.readPackageMetadata(dir)
+	meta, err := st.rt.readPackageMetadata(dir, isTestVariantID(pkgID))
 	if err != nil {
 		pkg.Errors = append(pkg.Errors, packages.Error{
 			Msg:  err.Error(),
@@ -574,9 +689,10 @@ type packageMetadata struct {
 	compiledGoFiles []string
 	ignoredFiles    []string
 	imports         []string
+	hasTestFiles    bool
 }
 
-func (rt *loaderRuntime) readPackageMetadata(dir string) (*packageMetadata, error) {
+func (rt *loaderRuntime) readPackageMetadata(dir string, includeTestFiles bool) (*packageMetadata, error) {
 	dir = filepath.Clean(dir)
 	fileNames := make(map[string]struct{})
 
@@ -631,7 +747,8 @@ func (rt *loaderRuntime) readPackageMetadata(dir string) (*packageMetadata, erro
 			meta.ignoredFiles = append(meta.ignoredFiles, absPath)
 			continue
 		}
-		if strings.HasSuffix(name, "_test.go") {
+		isTestFile := strings.HasSuffix(name, "_test.go")
+		if isTestFile && !includeTestFiles {
 			meta.ignoredFiles = append(meta.ignoredFiles, absPath)
 			continue
 		}
@@ -652,6 +769,9 @@ func (rt *loaderRuntime) readPackageMetadata(dir string) (*packageMetadata, erro
 
 		meta.goFiles = append(meta.goFiles, absPath)
 		meta.compiledGoFiles = append(meta.compiledGoFiles, absPath)
+		if isTestFile {
+			meta.hasTestFiles = true
+		}
 		for _, importPath := range fileImports {
 			importSet[importPath] = struct{}{}
 		}
@@ -727,6 +847,62 @@ func (rt *loaderRuntime) hasGoCandidates(dir string) bool {
 	}
 
 	return false
+}
+
+func (rt *loaderRuntime) hasTestCandidates(dir string) bool {
+	dir = filepath.Clean(dir)
+
+	for _, name := range rt.overlayDir[dir] {
+		if strings.HasSuffix(name, "_test.go") {
+			absPath := filepath.Join(dir, name)
+			includeFile, err := rt.shouldIncludeGoFile(dir, name, absPath)
+			if err == nil && includeFile {
+				return true
+			}
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if !strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+
+		absPath := filepath.Join(dir, name)
+		includeFile, err := rt.shouldIncludeGoFile(dir, name, absPath)
+		if err == nil && includeFile {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (rt *loaderRuntime) syntheticTestMainPath(testMainID string) string {
+	cacheRoot := filepath.Clean(rt.cfg.Env["GOCACHE"])
+	if cacheRoot == "" || cacheRoot == "." {
+		cacheRoot = filepath.Clean(os.TempDir())
+	}
+
+	safeName := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		" ", "_",
+		"[", "",
+		"]", "",
+		":", "_",
+	).Replace(testMainID)
+
+	return filepath.Join(cacheRoot, "gopackagesdriver", safeName+"-testmain.go")
 }
 
 func (rt *loaderRuntime) resolveImportPrefixToDir(importPrefix string) (string, error) {
@@ -1374,6 +1550,28 @@ func chunkPatterns(patterns []string, maxChunkLen int) [][]string {
 
 func isAbsoluteRecursivePattern(pattern string) bool {
 	return strings.HasSuffix(pattern, "/...") && filepath.IsAbs(strings.TrimSuffix(pattern, "/..."))
+}
+
+func isTestVariantID(pkgID string) bool {
+	if !strings.Contains(pkgID, " [") || !strings.HasSuffix(pkgID, ".test]") {
+		return false
+	}
+
+	openIdx := strings.Index(pkgID, " [")
+	return openIdx > 0
+}
+
+func packagePathForID(pkgID string) string {
+	if !isTestVariantID(pkgID) {
+		return pkgID
+	}
+
+	openIdx := strings.Index(pkgID, " [")
+	if openIdx <= 0 {
+		return pkgID
+	}
+
+	return pkgID[:openIdx]
 }
 
 func normalizeAbsolutePath(baseDir, path string) string {

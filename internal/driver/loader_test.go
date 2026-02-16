@@ -382,6 +382,81 @@ func TestResolveImportCanonicalizesGorootVendorID(t *testing.T) {
 	}
 }
 
+func TestLoaderTestsModeAddsTestVariantRoots(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeFile(t, filepath.Join(tmpDir, "go.mod"), "module example.com/app\n\ngo 1.25.0\n")
+	writeFile(t, filepath.Join(tmpDir, "app.go"), "package app\n\nfunc Value() string { return \"ok\" }\n")
+	writeFile(t, filepath.Join(tmpDir, "app_test.go"), "package app\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) {\n\tif Value() == \"\" {\n\t\tt.Fatal(\"empty\")\n\t}\n}\n")
+
+	cfg := Config{
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps |
+			packages.NeedForTest,
+		Dir:   tmpDir,
+		Tests: true,
+		Env: map[string]string{
+			"GOOS":   runtime.GOOS,
+			"GOARCH": runtime.GOARCH,
+			"GOROOT": runtime.GOROOT(),
+		},
+	}
+
+	rsp, err := NewLoader(cfg).Load(context.Background(), []string{"."})
+	if err != nil {
+		t.Fatalf("Load failed: %s", err)
+	}
+
+	rootSet := make(map[string]struct{}, len(rsp.Roots))
+	byID := make(map[string]*packages.Package, len(rsp.Packages))
+	for _, rootID := range rsp.Roots {
+		rootSet[rootID] = struct{}{}
+	}
+	for _, pkg := range rsp.Packages {
+		byID[pkg.ID] = pkg
+	}
+
+	variantID := "example.com/app [example.com/app.test]"
+	testMainID := "example.com/app.test"
+
+	if !hasKey(rootSet, variantID) {
+		t.Fatalf("missing test variant root: %q", variantID)
+	}
+	if !hasKey(rootSet, testMainID) {
+		t.Fatalf("missing test main root: %q", testMainID)
+	}
+
+	variantPkg := byID[variantID]
+	if variantPkg == nil {
+		t.Fatalf("missing test variant package")
+	}
+	if variantPkg.PkgPath != "example.com/app" {
+		t.Fatalf("unexpected test variant PkgPath: got %q", variantPkg.PkgPath)
+	}
+	if len(variantPkg.GoFiles) != 2 {
+		t.Fatalf("unexpected test variant GoFiles count: got %d want 2", len(variantPkg.GoFiles))
+	}
+
+	testMainPkg := byID[testMainID]
+	if testMainPkg == nil {
+		t.Fatalf("missing test main package")
+	}
+	if !hasKey(testMainPkg.Imports, "example.com/app") {
+		t.Fatalf("test main should import root package path")
+	}
+	if testMainPkg.Imports["example.com/app"].ID != variantID {
+		t.Fatalf("test main root import should point to test variant: got %q", testMainPkg.Imports["example.com/app"].ID)
+	}
+	if !hasKey(testMainPkg.Imports, "testing/internal/testdeps") {
+		t.Fatalf("test main missing testing/internal/testdeps import")
+	}
+	if len(testMainPkg.Errors) > 0 {
+		t.Fatalf("unexpected test main errors: %+v", testMainPkg.Errors)
+	}
+}
+
 func writeFile(t *testing.T, filePath, content string) {
 	t.Helper()
 

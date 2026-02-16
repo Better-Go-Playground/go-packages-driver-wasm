@@ -169,6 +169,28 @@ Instead, ask the operator (human) to collect new samples.
     - `github.com/x1unix/thoughtly-ticket-booking/tests.test`
   - missing package IDs are `tests=true` companion/testdeps graph nodes (for example `go/ast`, `go/parser`, `testing/internal/testdeps`, `runtime/pprof`, `runtime/cgo`, `internal/fuzz`, and several `vendor/golang.org/x/text/...` IDs).
 
+### Tests=true Fix Progress (Current Pass)
+
+- Implemented initial `tests=true` variant modeling in `internal/driver/loader.go`:
+  - root loading now synthesizes test variant roots when `Config.Tests=true` and `NeedForTest` is requested
+  - added package variant IDs in the form `<pkg> [<pkg>.test]`
+  - added synthetic test-main package IDs in the form `<pkg>.test`
+- Implemented test variant package loading behavior:
+  - package IDs with test-variant shape now include `_test.go` files from the same package
+  - test variant `PkgPath` is normalized back to the base package path (`<pkg>`) instead of the bracketed ID
+- Implemented synthetic test-main package wiring:
+  - imports include base package import key pointing to the test-variant ID
+  - imports include `os`, `reflect`, `testing`, and `testing/internal/testdeps` to trigger the testdeps graph load
+- Added regression coverage in `internal/driver/loader_test.go`:
+  - `TestLoaderTestsModeAddsTestVariantRoots`
+- Validation:
+  - Ran: `go test ./internal/driver`
+  - Result: PASS
+  - Ran: `go test ./...`
+  - Result: PASS
+- Pending human validation:
+  - run smoke harness again and provide new traces to verify stage-2 residual parity (`tests.test` roots and companion testdeps packages) is resolved.
+
 ## Snapshot (2026-02-12)
 
 ### Status

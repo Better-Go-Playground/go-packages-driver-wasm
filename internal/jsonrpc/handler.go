@@ -277,7 +277,7 @@ func (mux *ServeMux) serveError(dst io.Writer, reqID int, e *Error) error {
 }
 
 func (mux *ServeMux) serveResponse(dst io.Writer, rsp *Response) error {
-	buff := bytes.NewBuffer(make([]byte, 1024))
+	buff := bytes.NewBuffer(make([]byte, 0, 1024))
 
 	// NOTE: responses should be delimited by LF (\n).
 	if err := json.NewEncoder(buff).Encode(rsp); err != nil {

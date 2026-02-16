@@ -20,6 +20,7 @@ import (
 
 	"golang.org/x/mod/modfile"
 	modmodule "golang.org/x/mod/module"
+	"golang.org/x/mod/semver"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -874,19 +875,17 @@ func (rt *loaderRuntime) resolveModuleCacheImport(importPath, srcDir string) (*r
 		return nil, nil
 	}
 
-	currentModule, err := rt.moduleForSourceDir(srcDir)
-	if err != nil || currentModule == nil {
-		return nil, err
-	}
-
-	requires, err := rt.moduleRequirements(currentModule)
+	requirementMaps, err := rt.moduleRequirementSources(srcDir)
 	if err != nil {
 		return nil, err
 	}
+	if len(requirementMaps) == 0 {
+		return nil, nil
+	}
 
 	for _, modulePath := range modulePathCandidates(importPath) {
-		version, ok := requires[modulePath]
-		if !ok || version == "" {
+		version := resolveRequiredVersion(modulePath, requirementMaps)
+		if version == "" {
 			continue
 		}
 
@@ -914,6 +913,53 @@ func (rt *loaderRuntime) resolveModuleCacheImport(importPath, srcDir string) (*r
 	}
 
 	return nil, nil
+}
+
+func (rt *loaderRuntime) moduleRequirementSources(srcDir string) ([]map[string]string, error) {
+	sources := make([]map[string]string, 0, 2)
+
+	if rt.mainModule != nil {
+		requires, err := rt.moduleRequirements(rt.mainModule)
+		if err != nil {
+			return nil, err
+		}
+		if len(requires) > 0 {
+			sources = append(sources, requires)
+		}
+	}
+
+	currentModule, err := rt.moduleForSourceDir(srcDir)
+	if err != nil {
+		return nil, err
+	}
+	if currentModule == nil {
+		return sources, nil
+	}
+
+	if rt.mainModule != nil && currentModule.GoModPath == rt.mainModule.GoModPath {
+		return sources, nil
+	}
+
+	requires, err := rt.moduleRequirements(currentModule)
+	if err != nil {
+		return nil, err
+	}
+	if len(requires) > 0 {
+		sources = append(sources, requires)
+	}
+
+	return sources, nil
+}
+
+func resolveRequiredVersion(modulePath string, requirementMaps []map[string]string) string {
+	for _, requires := range requirementMaps {
+		version, ok := requires[modulePath]
+		if ok && version != "" {
+			return version
+		}
+	}
+
+	return ""
 }
 
 func (rt *loaderRuntime) moduleForSourceDir(srcDir string) (*moduleInfo, error) {
@@ -968,40 +1014,136 @@ func (rt *loaderRuntime) moduleFromVersionRef(modulePath, version string) (*modu
 		return nil, err
 	}
 
+	modDir := rt.findModuleDir(escapedPath, escapedVersion)
+	resolvedVersion := version
+	if modDir == "" {
+		var bestVersion string
+		modDir, bestVersion, err = rt.findBestModuleDir(escapedPath)
+		if err != nil {
+			return nil, err
+		}
+		if modDir == "" {
+			return nil, nil
+		}
+		resolvedVersion = bestVersion
+	}
+
+	goModPath := filepath.Join(modDir, "go.mod")
+	modGoVersion := ""
+	parsedModulePath := modulePath
+	if fileExists(goModPath) {
+		summary, parseErr := readGoModSummary(goModPath)
+		if parseErr == nil {
+			if summary.modulePath != "" {
+				parsedModulePath = summary.modulePath
+			}
+			modGoVersion = summary.goVersion
+			rt.moduleReqs[goModPath] = summary.requires
+		}
+	}
+
+	mi := &moduleInfo{
+		Path:      parsedModulePath,
+		Dir:       modDir,
+		GoModPath: goModPath,
+		GoVersion: modGoVersion,
+		Main:      false,
+	}
+
+	rt.moduleByRef[cacheKey] = mi
+	if resolvedVersion != "" {
+		resolvedCacheKey := modulePath + "@" + resolvedVersion
+		rt.moduleByRef[resolvedCacheKey] = mi
+	}
+
+	return mi, nil
+}
+
+func (rt *loaderRuntime) findModuleDir(escapedPath, escapedVersion string) string {
 	cacheDirName := escapedPath + "@" + escapedVersion
 	for _, root := range rt.goModCache {
 		modDir := filepath.Join(root, cacheDirName)
-		if !dirExists(modDir) {
-			continue
+		if dirExists(modDir) {
+			return modDir
 		}
-
-		goModPath := filepath.Join(modDir, "go.mod")
-		modGoVersion := ""
-		parsedModulePath := modulePath
-		if fileExists(goModPath) {
-			summary, parseErr := readGoModSummary(goModPath)
-			if parseErr == nil {
-				if summary.modulePath != "" {
-					parsedModulePath = summary.modulePath
-				}
-				modGoVersion = summary.goVersion
-				rt.moduleReqs[goModPath] = summary.requires
-			}
-		}
-
-		mi := &moduleInfo{
-			Path:      parsedModulePath,
-			Dir:       modDir,
-			GoModPath: goModPath,
-			GoVersion: modGoVersion,
-			Main:      false,
-		}
-
-		rt.moduleByRef[cacheKey] = mi
-		return mi, nil
 	}
 
-	return nil, nil
+	return ""
+}
+
+func (rt *loaderRuntime) findBestModuleDir(escapedPath string) (string, string, error) {
+	bestDir := ""
+	bestVersion := ""
+
+	for _, root := range rt.goModCache {
+		matches, err := filepath.Glob(filepath.Join(root, escapedPath+"@*"))
+		if err != nil {
+			return "", "", err
+		}
+
+		for _, match := range matches {
+			if !dirExists(match) {
+				continue
+			}
+
+			base := filepath.Base(match)
+			at := strings.LastIndex(base, "@")
+			if at <= 0 {
+				continue
+			}
+
+			escapedVersion := base[at+1:]
+			unescapedVersion, err := modmodule.UnescapeVersion(escapedVersion)
+			if err != nil {
+				continue
+			}
+
+			if bestDir == "" || compareModuleVersions(unescapedVersion, bestVersion) > 0 {
+				bestDir = match
+				bestVersion = unescapedVersion
+			}
+		}
+	}
+
+	return bestDir, bestVersion, nil
+}
+
+func compareModuleVersions(a, b string) int {
+	aNorm := normalizeModuleVersion(a)
+	bNorm := normalizeModuleVersion(b)
+
+	if aNorm != "" && bNorm != "" {
+		return semver.Compare(aNorm, bNorm)
+	}
+
+	if aNorm != "" {
+		return 1
+	}
+	if bNorm != "" {
+		return -1
+	}
+
+	return strings.Compare(a, b)
+}
+
+func normalizeModuleVersion(version string) string {
+	if version == "" {
+		return ""
+	}
+
+	if semver.IsValid(version) {
+		return version
+	}
+
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+
+	if semver.IsValid(version) {
+		return version
+	}
+
+	return ""
 }
 
 func modulePathCandidates(importPath string) []string {

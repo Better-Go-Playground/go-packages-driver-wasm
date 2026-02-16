@@ -5,7 +5,7 @@
 ### Status
 
 - MVP loader behavior is still in place and covered by current unit tests.
-- Live gopls validation uncovered a high-priority parity bug: module-mode external imports are not resolved.
+- Initial high-priority parity bug (module-mode external imports unresolved) is largely fixed; operator traces show major parity improvement with a small remaining delta.
 
 ### New Bug: External Imports Unresolved In gopls
 
@@ -53,7 +53,7 @@ Instead, ask the operator (human) to collect new samples.
   - both traces carry `GOMOD`, `GOPATH`, `GOROOT`, and `GOMODCACHE=/home/x1unix/go/pkg/mod`
   - unresolved external imports are therefore consistent with resolver behavior gaps, not missing env values in the request.
 
-### Investigation Findings (Code-Level)
+### Initial Investigation Findings (Pre-fix)
 
 - `internal/driver/loader.go` currently resolves imports from:
   - main module path match
@@ -108,6 +108,43 @@ Instead, ask the operator (human) to collect new samples.
 - Result: PASS
 - NOTE respected: no `scripts/ldp-drv*` execution.
 - Pending human validation: side-by-side gopls smoke test trace capture (`scripts/lsp-drv-standard.sh` vs `scripts/lsp-drv-custom.sh`).
+
+### Post-Fix Smoke Validation (Operator Traces)
+
+- Operator provided new artifacts in `logs/after-bugfix`:
+  - baseline: `logs/after-bugfix/rpc-expected.trace.jsonl`
+  - custom: `logs/after-bugfix/rpc-got.trace.jsonl`
+  - NOTE respected: no interactive script execution by agent.
+- Top-level parity improved significantly:
+  - custom package count: `202 -> 314` (baseline still `340`)
+  - custom package error entries: `24 -> 5`
+  - missing package IDs vs baseline: `146 -> 28`
+  - extra package IDs vs baseline: `8 -> 2`
+- Confirmed fixed in traces:
+  - external imports now resolved for previously failing roots (`github.com/jackc/pgx/v5/stdlib`, `github.com/pressly/goose/v3`, `github.com/jackc/pgx/v5/pgxpool`, `github.com/georgysavva/scany/v2/pgxscan`)
+  - GOROOT vendored mappings now match baseline (`golang.org/x/...` imports map to `vendor/golang.org/x/...` IDs)
+- Remaining parity issues from `logs/after-bugfix`:
+  - unresolved package placeholders remain for:
+    - `github.com/klauspost/compress/{flate,gzip,zlib}`
+    - `github.com/mattn/go-isatty`
+    - `golang.org/x/sync/semaphore`
+  - `tests=true` root variants are still missing in custom:
+    - `github.com/x1unix/thoughtly-ticket-booking/tests [github.com/x1unix/thoughtly-ticket-booking/tests.test]`
+    - `github.com/x1unix/thoughtly-ticket-booking/tests.test`
+
+### Follow-up Fix Progress (This Pass)
+
+- Started second-pass resolver hardening in `internal/driver/loader.go` to address remaining external mismatch:
+  - module-cache version selection now prefers main-module requirements first, then source-module requirements
+  - when required version is absent in local module cache, resolver falls back to the best available cached version for that module path
+  - added version comparison logic for fallback selection (`x/mod/semver`)
+- Added targeted regression coverage in `internal/driver/loader_test.go`:
+  - `TestLoaderPrefersMainModuleVersionsForDependencies`
+- Validation after follow-up changes:
+  - Ran: `go test ./...`
+  - Result: PASS
+- Pending human validation:
+  - re-run smoke traces to confirm remaining 5 unresolved imports are eliminated and re-check package graph deltas.
 
 ## Snapshot (2026-02-12)
 

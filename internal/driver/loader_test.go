@@ -293,6 +293,62 @@ func TestLoaderResolvesTransitiveImportsUsingDependencyGoMod(t *testing.T) {
 	}
 }
 
+func TestLoaderPrefersMainModuleVersionsForDependencies(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	modCacheDir := filepath.Join(tmpDir, "modcache")
+
+	writeFile(t, filepath.Join(workspaceDir, "go.mod"), "module example.com/app\n\ngo 1.25.0\n\nrequire (\n\texample.com/common v1.2.0\n\texample.com/dep v1.0.0\n)\n")
+	writeFile(t, filepath.Join(workspaceDir, "main.go"), "package app\n\nimport _ \"example.com/dep/subpkg\"\n")
+
+	depRoot := filepath.Join(modCacheDir, moduleCachePath(t, "example.com/dep", "v1.0.0"))
+	writeFile(t, filepath.Join(depRoot, "go.mod"), "module example.com/dep\n\ngo 1.25.0\n\nrequire example.com/common v1.0.0\n")
+	writeFile(t, filepath.Join(depRoot, "subpkg", "subpkg.go"), "package subpkg\n\nimport _ \"example.com/common/pkg\"\n")
+
+	commonRoot := filepath.Join(modCacheDir, moduleCachePath(t, "example.com/common", "v1.2.0"))
+	writeFile(t, filepath.Join(commonRoot, "go.mod"), "module example.com/common\n\ngo 1.25.0\n")
+	writeFile(t, filepath.Join(commonRoot, "pkg", "pkg.go"), "package pkg\n\nfunc Value() string { return \"main-version\" }\n")
+
+	cfg := Config{
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps,
+		Dir: workspaceDir,
+		Env: map[string]string{
+			"GOOS":       runtime.GOOS,
+			"GOARCH":     runtime.GOARCH,
+			"GOROOT":     runtime.GOROOT(),
+			"GOMODCACHE": modCacheDir,
+		},
+	}
+
+	rsp, err := NewLoader(cfg).Load(context.Background(), []string{"."})
+	if err != nil {
+		t.Fatalf("Load failed: %s", err)
+	}
+
+	byID := make(map[string]*packages.Package, len(rsp.Packages))
+	for _, pkg := range rsp.Packages {
+		byID[pkg.ID] = pkg
+	}
+
+	commonPkg := byID["example.com/common/pkg"]
+	if commonPkg == nil {
+		t.Fatalf("missing common package resolved through main module requirements")
+	}
+	if len(commonPkg.GoFiles) == 0 {
+		t.Fatalf("common package should have GoFiles")
+	}
+	if !strings.Contains(commonPkg.GoFiles[0], "@v1.2.0") {
+		t.Fatalf("expected common package to use main module version v1.2.0, got file %q", commonPkg.GoFiles[0])
+	}
+	if len(commonPkg.Errors) > 0 {
+		t.Fatalf("unexpected common package errors: %+v", commonPkg.Errors)
+	}
+}
+
 func TestResolveImportCanonicalizesGorootVendorID(t *testing.T) {
 	vendorDir := filepath.Join(runtime.GOROOT(), "src", "vendor", "golang.org", "x", "net", "http", "httpguts")
 	if !dirExists(vendorDir) {

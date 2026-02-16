@@ -4,6 +4,7 @@
 
 /build
 /tmp
+/logs
 *.sock
 *.jsonl
 *.log

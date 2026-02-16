@@ -5,303 +5,48 @@
 ### Status
 
 - MVP loader behavior is still in place and covered by current unit tests.
-- External-import parity bug and `tests=true` root parity are fixed; operator stage-5 traces reached package ID parity (`missing=0`, `extra=0`, `Errors=0`).
-- Stage-6 operator traces confirm the `runtime/cgo` metadata-shape cleanup: package IDs and inspected import edges now match baseline.
+- External import resolution parity bug is CLOSED.
+- Final operator validation (`logs/fix-stage-6`) confirms baseline/custom parity (`missing=0`, `extra=0`, `Errors=0`) and runtime/cgo metadata alignment.
 
-### New Bug: External Imports Unresolved In gopls
+### Bug: External Imports Unresolved In gopls (Closed)
 
-- Repro environment:
-  - custom gopls built with `scripts/build-gopls.sh` (`-tags pipetransport`)
-  - baseline run via `scripts/lsp-drv-standard.sh`
-  - custom driver run via `scripts/lsp-drv-custom.sh`
-  - sample workspace: `/home/x1unix/tmp/book`
-- Trace artifacts collected in `logs/`:
-  - baseline: `rpc-expected.trace.jsonl`
-  - custom: `rpc-got.trace.jsonl`
-- Editor diagnostics observed with custom driver:
-  - `could not import github.com/jackc/pgx/v5/stdlib (go/packages driver could not load "github.com/jackc/pgx/v5/stdlib")`
-  - `could not import github.com/pressly/goose/v3 (go/packages driver could not load "github.com/pressly/goose/v3")`
+- Resolution status: CLOSED (validated in `logs/fix-stage-6`).
+- NOTE: do not run `scripts/ldp-drv*` from the agent (interactive neovim); operator collects smoke traces.
 
-NOTE: do not run `scripts/ldp-drv*` scripts as they start an interactive neovim session.
-Instead, ask the operator (human) to collect new samples.
+### Final Outcome
 
-### Trace Diff Findings (Baseline vs Custom)
-
-- Comparison used existing artifacts only:
-  - baseline: `logs/rpc-expected.trace.jsonl`
-  - custom: `logs/rpc-got.trace.jsonl`
-  - NOTE respected: no `scripts/ldp-drv*` execution and no new interactive sample capture.
-- Top-level response delta:
-  - baseline: `Roots=9`, `Packages=340`, package entries with `Errors`: `0`
-  - custom: `Roots=7`, `Packages=202`, package entries with `Errors`: `24`
-  - baseline trace has 2 equivalent response entries; custom trace has 1 response entry.
-- Package graph parity delta:
-  - package IDs missing in custom vs baseline: `146` (`102` external-module IDs, `44` stdlib/transitive IDs)
-  - package IDs only in custom vs baseline: `8` (all unresolved `golang.org/x/...` IDs)
-  - `16` overlapping package IDs regress to placeholders in custom (`GoFiles=0`, `Imports=0`, `Errors=[cannot resolve import path ...]`)
-  - placeholder examples: `github.com/jackc/pgx/v5/stdlib`, `github.com/pressly/goose/v3`, `github.com/jackc/pgx/v5/pgxpool`, `github.com/georgysavva/scany/v2/pgxscan`
-- Failure boundary evidence:
-  - workspace package `github.com/x1unix/thoughtly-ticket-booking/internal/booking` is identical in both traces (`GoFiles=4`, `Imports=9`, `Errors=0`)
-  - divergence starts when resolving external dependencies imported by workspace packages.
-- Additional parity gaps observed:
-  - `tests=true` root variants missing in custom:
-    - `github.com/x1unix/thoughtly-ticket-booking/tests [github.com/x1unix/thoughtly-ticket-booking/tests.test]`
-    - `github.com/x1unix/thoughtly-ticket-booking/tests.test`
-  - GOROOT vendored import mapping mismatch:
-    - baseline maps imports like `golang.org/x/net/http/httpguts` to package ID `vendor/golang.org/x/net/http/httpguts`
-    - custom maps same import to ID `golang.org/x/net/http/httpguts`, producing unresolved `golang.org/x/...` placeholders instead of matching `vendor/...` stdlib package IDs.
-- Env propagation sanity check:
-  - both traces carry `GOMOD`, `GOPATH`, `GOROOT`, and `GOMODCACHE=/home/x1unix/go/pkg/mod`
-  - unresolved external imports are therefore consistent with resolver behavior gaps, not missing env values in the request.
-
-### Initial Investigation Findings (Pre-fix)
-
-- `internal/driver/loader.go` currently resolves imports from:
-  - main module path match
-  - current package module path match (`moduleForDir(srcDir)`)
-  - `GOPATH/src`
-  - `GOROOT/src`
-- It does not yet resolve non-stdlib module dependencies from module cache locations (`GOMODCACHE` or `$GOPATH/pkg/mod`).
-- GOROOT vendored imports (`golang.org/x/...` within stdlib packages) are not canonicalized to `vendor/golang.org/x/...` package IDs, causing additional unresolved stdlib dependency nodes.
-- As a result, imports like `github.com/jackc/pgx/v5/stdlib` fail when not in the main module and not present in `GOPATH/src`, producing package load errors and BrokenImport diagnostics.
-
-### Investigation And Bugfix Plan
-
-1. Add trace diff analysis focused on failed package IDs/imports between `rpc-expected.trace.jsonl` and `rpc-got.trace.jsonl`.
-2. Extend runtime env handling for module cache resolution (`GOMODCACHE`, fallback `$GOPATH/pkg/mod`).
-3. Implement module-aware import resolution for external dependencies:
-   - derive candidate module path prefixes from import path
-   - map module path to version from nearest `go.mod` requirements
-   - resolve module root directory in module cache
-4. Canonicalize stdlib vendored imports so `golang.org/x/...` edges in GOROOT packages resolve to `vendor/golang.org/x/...` package IDs.
-5. Add on-demand transitive module requirement loading (parse dependency `go.mod` when needed, with caching).
-6. Add deterministic tests:
-   - resolver unit tests for external module imports
-   - resolver unit tests for GOROOT vendored `golang.org/x/...` import ID mapping
-   - integration test that reproduces BrokenImport scenario
-   - fixture parity checks against reference traces
-7. Re-run validation:
-   - `go test ./...`
-   - side-by-side gopls smoke test with standard vs custom driver scripts (can be done only by human).
-
-### Fix Implementation Progress (This Pass)
-
-- Implemented module-cache-aware import resolution in `internal/driver/loader.go`:
-  - runtime now discovers module cache roots from `GOMODCACHE` with fallback to `$GOPATH/pkg/mod`
-  - import resolver now resolves external module imports via nearest module `go.mod` `require` versions
-  - module cache path resolution uses escaped module path/version (`x/mod/module` escaping)
-- Implemented on-demand dependency `go.mod` parsing with caching:
-  - parsed `require` maps are cached by `go.mod` path
-  - dependency module `go.mod` files are parsed as dependencies are traversed, enabling transitive resolution from dependency imports
-- Implemented GOROOT vendored import canonicalization:
-  - imports like `golang.org/x/net/http/httpguts` from stdlib sources now resolve to `GOROOT/src/vendor/...`
-  - package IDs for these imports now canonicalize to `vendor/golang.org/x/...` instead of unresolved `golang.org/x/...` placeholders
-- Updated module metadata shaping:
-  - module records now preserve `Main` accurately (`true` only for the workspace main module)
-- Added regression coverage in `internal/driver/loader_test.go`:
-  - `TestLoaderResolvesExternalImportsFromGoModCache`
-  - `TestLoaderResolvesTransitiveImportsUsingDependencyGoMod`
-  - `TestResolveImportCanonicalizesGorootVendorID`
-
-### Validation (This Pass)
-
-- Ran: `go test ./...`
-- Result: PASS
-- NOTE respected: no `scripts/ldp-drv*` execution.
-- Human validation completed in later stages (`logs/fix-stage-1`, `logs/fix-stage-2`).
-
-### Post-Fix Smoke Validation (Operator Traces)
-
-- Operator provided new artifacts in `logs/after-bugfix`:
-  - baseline: `logs/after-bugfix/rpc-expected.trace.jsonl`
-  - custom: `logs/after-bugfix/rpc-got.trace.jsonl`
-  - NOTE respected: no interactive script execution by agent.
-- Top-level parity improved significantly:
-  - custom package count: `202 -> 314` (baseline still `340`)
-  - custom package error entries: `24 -> 5`
-  - missing package IDs vs baseline: `146 -> 28`
-  - extra package IDs vs baseline: `8 -> 2`
-- Confirmed fixed in traces:
-  - external imports now resolved for previously failing roots (`github.com/jackc/pgx/v5/stdlib`, `github.com/pressly/goose/v3`, `github.com/jackc/pgx/v5/pgxpool`, `github.com/georgysavva/scany/v2/pgxscan`)
-  - GOROOT vendored mappings now match baseline (`golang.org/x/...` imports map to `vendor/golang.org/x/...` IDs)
-- Remaining parity issues from `logs/after-bugfix`:
-  - unresolved package placeholders remain for:
-    - `github.com/klauspost/compress/{flate,gzip,zlib}`
-    - `github.com/mattn/go-isatty`
-    - `golang.org/x/sync/semaphore`
-  - `tests=true` root variants are still missing in custom:
-    - `github.com/x1unix/thoughtly-ticket-booking/tests [github.com/x1unix/thoughtly-ticket-booking/tests.test]`
-    - `github.com/x1unix/thoughtly-ticket-booking/tests.test`
-
-### Follow-up Fix Progress (This Pass)
-
-- Started second-pass resolver hardening in `internal/driver/loader.go` to address remaining external mismatch:
-  - module-cache version selection now prefers main-module requirements first, then source-module requirements
-  - when required version is absent in local module cache, resolver falls back to the best available cached version for that module path
-  - added version comparison logic for fallback selection (`x/mod/semver`)
-- Added targeted regression coverage in `internal/driver/loader_test.go`:
-  - `TestLoaderPrefersMainModuleVersionsForDependencies`
-- Validation after follow-up changes:
-  - Ran: `go test ./...`
-  - Result: PASS
-- Human validation status:
-  - operator re-ran smoke traces in `logs/fix-stage-2` and confirmed the remaining 5 unresolved imports are eliminated.
-
-### Stage-2 Smoke Validation (Operator Traces)
-
-- Operator provided stage-2 artifacts in `logs/fix-stage-2`:
-  - baseline: `logs/fix-stage-2/rpc-expected.trace.jsonl`
-  - custom: `logs/fix-stage-2/rpc-got.trace.jsonl`
-  - NOTE respected: no interactive script execution by agent.
-- Stage-2 parity snapshot:
-  - baseline: `Roots=9`, `Packages=340`, `Errors=0`
-  - custom: `Roots=7`, `Packages=325`, `Errors=0`
-  - baseline-vs-custom package ID delta: `missing=15`, `extra=0`
-- Stage-1 to Stage-2 improvement (`logs/fix-stage-1` -> `logs/fix-stage-2` custom):
-  - packages: `314 -> 325`
-  - package errors: `5 -> 0`
-  - resolved previously failing imports:
-    - `github.com/klauspost/compress/{flate,gzip,zlib}`
-    - `github.com/mattn/go-isatty`
-    - `golang.org/x/sync/semaphore`
-- Remaining delta is now test-variant-related, not external import resolution:
-  - missing roots:
-    - `github.com/x1unix/thoughtly-ticket-booking/tests [github.com/x1unix/thoughtly-ticket-booking/tests.test]`
-    - `github.com/x1unix/thoughtly-ticket-booking/tests.test`
-  - missing package IDs are `tests=true` companion/testdeps graph nodes (for example `go/ast`, `go/parser`, `testing/internal/testdeps`, `runtime/pprof`, `runtime/cgo`, `internal/fuzz`, and several `vendor/golang.org/x/text/...` IDs).
-
-### Tests=true Fix Progress (Current Pass)
-
-- Implemented initial `tests=true` variant modeling in `internal/driver/loader.go`:
-  - root loading now synthesizes test variant roots when `Config.Tests=true` and `NeedForTest` is requested
-  - added package variant IDs in the form `<pkg> [<pkg>.test]`
-  - added synthetic test-main package IDs in the form `<pkg>.test`
-- Implemented test variant package loading behavior:
-  - package IDs with test-variant shape now include `_test.go` files from the same package
-  - test variant `PkgPath` is normalized back to the base package path (`<pkg>`) instead of the bracketed ID
-- Implemented synthetic test-main package wiring:
-  - imports include base package import key pointing to the test-variant ID
-  - imports include `os`, `reflect`, `testing`, and `testing/internal/testdeps` to trigger the testdeps graph load
-- Added regression coverage in `internal/driver/loader_test.go`:
-  - `TestLoaderTestsModeAddsTestVariantRoots`
-- Validation:
-  - Ran: `go test ./internal/driver`
-  - Result: PASS
-  - Ran: `go test ./...`
-  - Result: PASS
-- Pending human validation:
-  - run smoke harness again and provide new traces to verify stage-2 residual parity (`tests.test` roots and companion testdeps packages) is resolved.
-
-### Stage-3 Smoke Validation (Operator Traces)
-
-- Operator provided stage-3 artifacts in `logs/fix-stage-3`:
-  - baseline: `logs/fix-stage-3/rpc-expected.trace.jsonl`
-  - custom: `logs/fix-stage-3/rpc-got.trace.jsonl`
-  - NOTE respected: no interactive script execution by agent.
-- Stage-3 parity snapshot:
-  - baseline: `Roots=9`, `Packages=340`, `Errors=0`
-  - custom: `Roots=9`, `Packages=335`, `Errors=0`
-  - baseline-vs-custom package ID delta: `missing=5`, `extra=0`
-- Confirmed fixed in stage-3 traces:
-  - `tests=true` roots are now present in custom:
-    - `github.com/x1unix/thoughtly-ticket-booking/tests [github.com/x1unix/thoughtly-ticket-booking/tests.test]`
-    - `github.com/x1unix/thoughtly-ticket-booking/tests.test`
-  - previously missing testdeps companion nodes are now present (`go/ast`, `go/parser`, `go/scanner`, `go/token`, `go/build/constraint`, `internal/fuzz`, `runtime/pprof`, `testing/internal/testdeps`).
-- Remaining missing package IDs in stage-3 custom:
-  - `runtime/cgo`
-  - `vendor/golang.org/x/text/secure/bidirule`
-  - `vendor/golang.org/x/text/transform`
-  - `vendor/golang.org/x/text/unicode/bidi`
-  - `vendor/golang.org/x/text/unicode/norm`
-
-### Final Gap Fix Progress (Current Pass)
-
-- Implemented resolver/runtime fixes in `internal/driver/loader.go` for stage-3 residual gaps:
-  - removed early `loadByImport` cache short-circuit by `importPath`; import ID is now always derived from `resolveImport(importPath, srcDir)` so srcDir-specific vendoring is preserved
-  - this fixes nested GOROOT vendor import canonicalization when the same import path already exists in package cache under a non-vendor ID
-  - runtime build context now explicitly honors `CGO_ENABLED` values from request env (`1` enables, `0` disables)
-- Added regression coverage in `internal/driver/loader_test.go`:
-  - `TestResolveImportCanonicalizesNestedGorootVendorID`
-  - `TestLoadByImportPrefersResolvedVendorIDOverCachedImportPath`
-  - `TestNewLoaderRuntimeRespectsCGOEnabledEnv`
-- Validation:
-  - Ran: `go test ./internal/driver`
-  - Result: PASS
-  - Ran: `go test ./...`
-  - Result: PASS
-- Human validation completed in stage-4 traces (`logs/fix-stage-4`).
-
-### Stage-4 Smoke Validation (Operator Traces)
-
-- Operator provided stage-4 artifacts in `logs/fix-stage-4`:
-  - baseline: `logs/fix-stage-4/rpc-expected.trace.jsonl`
-  - custom: `logs/fix-stage-4/rpc-got.trace.jsonl`
-  - NOTE respected: no interactive script execution by agent.
-- Stage-4 parity snapshot:
-  - baseline: `Roots=9`, `Packages=340`, `Errors=0`
-  - custom: `Roots=9`, `Packages=339`, `Errors=0`
-  - baseline-vs-custom package ID delta: `missing=1`, `extra=0`
-- Confirmed fixed from stage-3 residual list:
-  - `vendor/golang.org/x/text/{secure/bidirule,transform,unicode/bidi,unicode/norm}` now present in custom and aligned with baseline
-- Remaining gap in stage-4 custom:
-  - `runtime/cgo` (only missing package ID)
-
-### Runtime/cgo Final Fix Progress (Current Pass)
-
-- Implemented cgo import normalization in `internal/driver/loader.go`:
-  - imports parsed as `"C"` now map to `runtime/cgo` when `CGO_ENABLED=1`
-  - keeps current behavior of skipping `"C"` import when cgo is disabled
-- Added regression coverage in `internal/driver/loader_test.go`:
-  - `TestLoaderMapsCgoImportToRuntimeCgo`
-- Validation:
-  - Ran: `go test ./internal/driver`
-  - Result: PASS
-  - Ran: `go test ./...`
-  - Result: PASS
-- Human validation completed in stage-5 traces (`logs/fix-stage-5`).
-
-### Stage-5 Smoke Validation (Operator Traces)
-
-- Operator provided stage-5 artifacts in `logs/fix-stage-5`:
-  - baseline: `logs/fix-stage-5/rpc-expected.trace.jsonl`
-  - custom: `logs/fix-stage-5/rpc-got.trace.jsonl`
-  - NOTE respected: no interactive script execution by agent.
-- Stage-5 parity snapshot:
+- Final parity (`logs/fix-stage-6`):
   - baseline: `Roots=9`, `Packages=340`, `Errors=0`
   - custom: `Roots=9`, `Packages=340`, `Errors=0`
-  - baseline-vs-custom package ID delta: `missing=0`, `extra=0`
-- Runtime/cgo status in stage-5:
-  - `runtime/cgo` package is now present in custom (closing stage-4 last missing ID)
-  - baseline importers: `net`, `os/user`
-  - custom importers: `net`, `os/user`, plus an extra self-edge in `runtime/cgo` (`runtime/cgo => runtime/cgo`)
+  - package ID delta: `missing=0`, `extra=0`
+- Key closure checks:
+  - previously broken external imports resolve (`pgx`, `goose`, `klauspost/compress`, `go-isatty`, `x/sync/semaphore`)
+  - `tests=true` roots exist (`<pkg> [<pkg>.test]`, `<pkg>.test`)
+  - `runtime/cgo` metadata matches baseline (no custom-only self-edge)
 
-### Runtime/cgo Metadata Cleanup (Current Pass)
+### Timeline (Condensed)
 
-- Implemented self-import guard in `internal/driver/loader.go`:
-  - mapped `"C" -> "runtime/cgo"` imports are skipped when they would create `pkg.ID == importPath` self-imports
-- Extended regression coverage in `internal/driver/loader_test.go`:
-  - `TestLoaderMapsCgoImportToRuntimeCgo` now also asserts `runtime/cgo` does not self-import
-- Validation:
-  - Ran: `go test ./internal/driver`
-  - Result: PASS
-  - Ran: `go test ./...`
-  - Result: PASS
-- Human validation completed in stage-6 traces (`logs/fix-stage-6`).
+- Initial state (`logs/before-bugfix`): custom had `Packages=202`, `Errors=24`, `missing=146` vs baseline.
+- Stage 1-2 (`logs/fix-stage-1`, `logs/fix-stage-2`): module-cache + vendored import fixes reduced unresolved external imports (`Errors 24 -> 0`, `missing 146 -> 15`).
+- Stage 3 (`logs/fix-stage-3`): `tests=true` variants/testdeps wiring restored missing test roots and companion graph nodes.
+- Stage 4-5 (`logs/fix-stage-4`, `logs/fix-stage-5`): closed vendored text/cgo gaps and reached package ID parity; one runtime/cgo self-edge metadata mismatch remained.
+- Stage 6 (`logs/fix-stage-6`): self-edge cleanup validated; baseline/custom parity achieved.
 
-### Stage-6 Smoke Validation (Operator Traces)
+### Implementation Summary
 
-- Operator provided stage-6 artifacts in `logs/fix-stage-6`:
-  - baseline: `logs/fix-stage-6/rpc-expected.trace.jsonl`
-  - custom: `logs/fix-stage-6/rpc-got.trace.jsonl`
-  - NOTE respected: no interactive script execution by agent.
-- Stage-6 parity snapshot:
-  - baseline: `Roots=9`, `Packages=340`, `Errors=0`
-  - custom: `Roots=9`, `Packages=340`, `Errors=0`
-  - baseline-vs-custom package ID delta: `missing=0`, `extra=0`
-- Runtime/cgo metadata verification:
-  - both baseline and custom include `runtime/cgo`
-  - both now have the same `runtime/cgo` importer set (`net`, `os/user`)
-  - stage-5 custom-only self-edge (`runtime/cgo => runtime/cgo`) is no longer present.
+- Core resolver implementation in `internal/driver/loader.go` now includes:
+  - module-cache-aware resolution (`GOMODCACHE` and `$GOPATH/pkg/mod` fallback)
+  - on-demand `go.mod` requirement parsing and caching for transitive deps
+  - best-available-version fallback in cache when exact version dir is missing
+  - source-dir-aware GOROOT vendored import canonicalization (`vendor/...` IDs)
+  - `tests=true` variant and synthetic test-main package modeling
+  - cgo normalization (`"C" -> runtime/cgo`) and self-import guard
+  - explicit `CGO_ENABLED` handling in build context
+- Regression coverage added in `internal/driver/loader_test.go` across all fix areas (module cache, vendoring, tests variants, cgo).
+
+### Resolver Documentation
+
+- Durable reference for future work: `docs/import-resolution.md`.
 
 ## Snapshot (2026-02-12)
 
@@ -361,7 +106,7 @@ Instead, ask the operator (human) to collect new samples.
 
 ## Next Implementation Targets
 
-1. Implement `tests=true` package variants (`ForTest` and related IDs) for closer `mode=32287` behavior.
-2. Improve package metadata parity (`DepsErrors`, `TypeErrors`, richer module/error shaping).
-3. Add golden fixture parity tests from `docs/reference/driver-requests-responses.md`.
-4. Tighten edge-case handling for import-path-only module dependencies and no-match semantics.
+1. Add golden fixture parity tests from `docs/reference/driver-requests-responses.md`.
+2. Add broader integration tests for `tests=true/false`, recursive patterns, and error/no-match semantics.
+3. Improve package metadata parity (`DepsErrors`, `TypeErrors`, richer module/error shaping).
+4. Extend regression fixtures for vendored/stdlib and cgo edge-cases to lock current parity behavior.

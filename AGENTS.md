@@ -5,6 +5,7 @@
 - This repo is an alternative Go packages driver for the gopls Go language server, aimed at working in constrained environments, where external process execution is not possible.
 - The driver avoids spawning external processes and uses a custom RPC extension to pass patterns and environment data.
 - See `internal/models/request.go` for the driver request envelope type.
+- See `CODE_STYLE.md` for coding style.
 
 **Project Structure (Internal Focus)**
 

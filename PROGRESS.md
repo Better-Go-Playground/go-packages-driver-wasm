@@ -5,7 +5,7 @@
 ### Status
 
 - MVP loader behavior is still in place and covered by current unit tests.
-- High-priority external-import parity bug is fixed in stage-2 operator traces; remaining parity gap is now concentrated in `tests=true` test-variant package modeling.
+- External-import parity bug is fixed and `tests=true` roots are now present in operator stage-3 traces; remaining parity gap is down to 5 stdlib/vendor IDs.
 
 ### New Bug: External Imports Unresolved In gopls
 
@@ -190,6 +190,46 @@ Instead, ask the operator (human) to collect new samples.
   - Result: PASS
 - Pending human validation:
   - run smoke harness again and provide new traces to verify stage-2 residual parity (`tests.test` roots and companion testdeps packages) is resolved.
+
+### Stage-3 Smoke Validation (Operator Traces)
+
+- Operator provided stage-3 artifacts in `logs/fix-stage-3`:
+  - baseline: `logs/fix-stage-3/rpc-expected.trace.jsonl`
+  - custom: `logs/fix-stage-3/rpc-got.trace.jsonl`
+  - NOTE respected: no interactive script execution by agent.
+- Stage-3 parity snapshot:
+  - baseline: `Roots=9`, `Packages=340`, `Errors=0`
+  - custom: `Roots=9`, `Packages=335`, `Errors=0`
+  - baseline-vs-custom package ID delta: `missing=5`, `extra=0`
+- Confirmed fixed in stage-3 traces:
+  - `tests=true` roots are now present in custom:
+    - `github.com/x1unix/thoughtly-ticket-booking/tests [github.com/x1unix/thoughtly-ticket-booking/tests.test]`
+    - `github.com/x1unix/thoughtly-ticket-booking/tests.test`
+  - previously missing testdeps companion nodes are now present (`go/ast`, `go/parser`, `go/scanner`, `go/token`, `go/build/constraint`, `internal/fuzz`, `runtime/pprof`, `testing/internal/testdeps`).
+- Remaining missing package IDs in stage-3 custom:
+  - `runtime/cgo`
+  - `vendor/golang.org/x/text/secure/bidirule`
+  - `vendor/golang.org/x/text/transform`
+  - `vendor/golang.org/x/text/unicode/bidi`
+  - `vendor/golang.org/x/text/unicode/norm`
+
+### Final Gap Fix Progress (Current Pass)
+
+- Implemented resolver/runtime fixes in `internal/driver/loader.go` for stage-3 residual gaps:
+  - removed early `loadByImport` cache short-circuit by `importPath`; import ID is now always derived from `resolveImport(importPath, srcDir)` so srcDir-specific vendoring is preserved
+  - this fixes nested GOROOT vendor import canonicalization when the same import path already exists in package cache under a non-vendor ID
+  - runtime build context now explicitly honors `CGO_ENABLED` values from request env (`1` enables, `0` disables)
+- Added regression coverage in `internal/driver/loader_test.go`:
+  - `TestResolveImportCanonicalizesNestedGorootVendorID`
+  - `TestLoadByImportPrefersResolvedVendorIDOverCachedImportPath`
+  - `TestNewLoaderRuntimeRespectsCGOEnabledEnv`
+- Validation:
+  - Ran: `go test ./internal/driver`
+  - Result: PASS
+  - Ran: `go test ./...`
+  - Result: PASS
+- Pending human validation:
+  - run smoke harness again and provide a new trace set (recommended `logs/fix-stage-4`) to confirm stage-3 remaining 5 package IDs are eliminated.
 
 ## Snapshot (2026-02-12)
 

@@ -382,6 +382,109 @@ func TestResolveImportCanonicalizesGorootVendorID(t *testing.T) {
 	}
 }
 
+func TestResolveImportCanonicalizesNestedGorootVendorID(t *testing.T) {
+	srcDir := filepath.Join(runtime.GOROOT(), "src", "vendor", "golang.org", "x", "net", "idna")
+	vendorDir := filepath.Join(runtime.GOROOT(), "src", "vendor", "golang.org", "x", "text", "unicode", "bidi")
+	if !dirExists(srcDir) || !dirExists(vendorDir) {
+		t.Skip("GOROOT nested vendor package not available in current toolchain")
+	}
+
+	rt, err := newLoaderRuntime(Config{
+		Dir: t.TempDir(),
+		Env: map[string]string{
+			"GOOS":   runtime.GOOS,
+			"GOARCH": runtime.GOARCH,
+			"GOROOT": runtime.GOROOT(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("newLoaderRuntime failed: %s", err)
+	}
+
+	resolvedDir, pkgID, _, err := rt.resolveImport(
+		"golang.org/x/text/unicode/bidi",
+		srcDir,
+	)
+	if err != nil {
+		t.Fatalf("resolveImport failed: %s", err)
+	}
+	if pkgID != "vendor/golang.org/x/text/unicode/bidi" {
+		t.Fatalf("unexpected nested vendored package ID: got %q", pkgID)
+	}
+	if resolvedDir != vendorDir {
+		t.Fatalf("unexpected nested vendored package dir: got %q want %q", resolvedDir, vendorDir)
+	}
+}
+
+func TestLoadByImportPrefersResolvedVendorIDOverCachedImportPath(t *testing.T) {
+	srcDir := filepath.Join(runtime.GOROOT(), "src", "vendor", "golang.org", "x", "net", "idna")
+	if !dirExists(srcDir) {
+		t.Skip("GOROOT nested vendor package not available in current toolchain")
+	}
+
+	rt, err := newLoaderRuntime(Config{
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps,
+		Dir: t.TempDir(),
+		Env: map[string]string{
+			"GOOS":   runtime.GOOS,
+			"GOARCH": runtime.GOARCH,
+			"GOROOT": runtime.GOROOT(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("newLoaderRuntime failed: %s", err)
+	}
+
+	st := newLoaderState(rt)
+	st.packages["golang.org/x/text/unicode/bidi"] = &packages.Package{ID: "golang.org/x/text/unicode/bidi"}
+
+	pkg, err := st.loadByImport(context.Background(), "golang.org/x/text/unicode/bidi", srcDir)
+	if err != nil {
+		t.Fatalf("loadByImport failed: %s", err)
+	}
+	if pkg.ID != "vendor/golang.org/x/text/unicode/bidi" {
+		t.Fatalf("expected vendor package ID, got %q", pkg.ID)
+	}
+}
+
+func TestNewLoaderRuntimeRespectsCGOEnabledEnv(t *testing.T) {
+	rtEnabled, err := newLoaderRuntime(Config{
+		Dir: t.TempDir(),
+		Env: map[string]string{
+			"GOOS":        runtime.GOOS,
+			"GOARCH":      runtime.GOARCH,
+			"GOROOT":      runtime.GOROOT(),
+			"CGO_ENABLED": "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("newLoaderRuntime with CGO_ENABLED=1 failed: %s", err)
+	}
+	if !rtEnabled.buildCtx.CgoEnabled {
+		t.Fatalf("expected CgoEnabled=true when CGO_ENABLED=1")
+	}
+
+	rtDisabled, err := newLoaderRuntime(Config{
+		Dir: t.TempDir(),
+		Env: map[string]string{
+			"GOOS":        runtime.GOOS,
+			"GOARCH":      runtime.GOARCH,
+			"GOROOT":      runtime.GOROOT(),
+			"CGO_ENABLED": "0",
+		},
+	})
+	if err != nil {
+		t.Fatalf("newLoaderRuntime with CGO_ENABLED=0 failed: %s", err)
+	}
+	if rtDisabled.buildCtx.CgoEnabled {
+		t.Fatalf("expected CgoEnabled=false when CGO_ENABLED=0")
+	}
+}
+
 func TestLoaderTestsModeAddsTestVariantRoots(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeFile(t, filepath.Join(tmpDir, "go.mod"), "module example.com/app\n\ngo 1.25.0\n")

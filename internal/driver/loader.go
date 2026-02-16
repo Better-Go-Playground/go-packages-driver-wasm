@@ -174,8 +174,8 @@ func newLoaderRuntime(cfg Config) (*loaderRuntime, error) {
 	if len(gopath) > 0 {
 		buildCtx.GOPATH = strings.Join(gopath, string(os.PathListSeparator))
 	}
-	if cfg.Env["CGO_ENABLED"] == "0" {
-		buildCtx.CgoEnabled = false
+	if cgoEnabled, ok := cfg.Env["CGO_ENABLED"]; ok {
+		buildCtx.CgoEnabled = cgoEnabled != "0"
 	}
 
 	rt := &loaderRuntime{
@@ -524,10 +524,6 @@ func (st *loaderState) addTestMainPackage(ctx context.Context, rootPkg *packages
 func (st *loaderState) loadByImport(ctx context.Context, importPath, srcDir string) (*packages.Package, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-
-	if pkg, ok := st.packages[importPath]; ok {
-		return pkg, nil
 	}
 
 	dir, pkgID, mod, err := st.rt.resolveImport(importPath, srcDir)

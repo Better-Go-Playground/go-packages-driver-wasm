@@ -5,7 +5,8 @@
 ### Status
 
 - MVP loader behavior is still in place and covered by current unit tests.
-- External-import parity bug is fixed and `tests=true` roots are now present; operator stage-4 traces reduced parity delta to 1 remaining package ID (`runtime/cgo`).
+- External-import parity bug and `tests=true` root parity are fixed; operator stage-5 traces reached package ID parity (`missing=0`, `extra=0`, `Errors=0`).
+- A remaining metadata-shape mismatch was observed in stage-5 (`runtime/cgo` self-import edge in custom) and was fixed in code; awaiting refreshed traces.
 
 ### New Bug: External Imports Unresolved In gopls
 
@@ -257,8 +258,36 @@ Instead, ask the operator (human) to collect new samples.
   - Result: PASS
   - Ran: `go test ./...`
   - Result: PASS
+- Human validation completed in stage-5 traces (`logs/fix-stage-5`).
+
+### Stage-5 Smoke Validation (Operator Traces)
+
+- Operator provided stage-5 artifacts in `logs/fix-stage-5`:
+  - baseline: `logs/fix-stage-5/rpc-expected.trace.jsonl`
+  - custom: `logs/fix-stage-5/rpc-got.trace.jsonl`
+  - NOTE respected: no interactive script execution by agent.
+- Stage-5 parity snapshot:
+  - baseline: `Roots=9`, `Packages=340`, `Errors=0`
+  - custom: `Roots=9`, `Packages=340`, `Errors=0`
+  - baseline-vs-custom package ID delta: `missing=0`, `extra=0`
+- Runtime/cgo status in stage-5:
+  - `runtime/cgo` package is now present in custom (closing stage-4 last missing ID)
+  - baseline importers: `net`, `os/user`
+  - custom importers: `net`, `os/user`, plus an extra self-edge in `runtime/cgo` (`runtime/cgo => runtime/cgo`)
+
+### Runtime/cgo Metadata Cleanup (Current Pass)
+
+- Implemented self-import guard in `internal/driver/loader.go`:
+  - mapped `"C" -> "runtime/cgo"` imports are skipped when they would create `pkg.ID == importPath` self-imports
+- Extended regression coverage in `internal/driver/loader_test.go`:
+  - `TestLoaderMapsCgoImportToRuntimeCgo` now also asserts `runtime/cgo` does not self-import
+- Validation:
+  - Ran: `go test ./internal/driver`
+  - Result: PASS
+  - Ran: `go test ./...`
+  - Result: PASS
 - Pending human validation:
-  - run smoke harness once more and provide a new trace set (recommended `logs/fix-stage-5`) to confirm the final `runtime/cgo` delta is eliminated.
+  - run smoke harness once more and provide a new trace set (recommended `logs/fix-stage-6`) to confirm stage-5 `runtime/cgo` self-edge metadata mismatch is eliminated.
 
 ## Snapshot (2026-02-12)
 

@@ -530,6 +530,11 @@ func TestLoaderMapsCgoImportToRuntimeCgo(t *testing.T) {
 	if !hasKey(byID, "runtime/cgo") {
 		t.Fatalf("runtime/cgo package should be loaded")
 	}
+
+	runtimeCgoPkg := byID["runtime/cgo"]
+	if hasKey(runtimeCgoPkg.Imports, "runtime/cgo") {
+		t.Fatalf("runtime/cgo package must not self-import runtime/cgo: %+v", runtimeCgoPkg.Imports)
+	}
 }
 
 func TestLoaderTestsModeAddsTestVariantRoots(t *testing.T) {

@@ -609,6 +609,10 @@ func (st *loaderState) loadResolvedDir(ctx context.Context, dir, pkgID string, m
 				}
 			}
 
+			if importPath == pkg.ID {
+				continue
+			}
+
 			importID := importPath
 			if st.rt.wantsDeps() {
 				depPkg, depErr := st.loadByImport(ctx, importPath, dir)

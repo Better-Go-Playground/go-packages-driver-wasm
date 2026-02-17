@@ -52,10 +52,10 @@ func (st *loaderState) loadChunk(ctx context.Context, patterns []string) error {
 }
 
 func (st *loaderState) loadPattern(ctx context.Context, pattern string) []string {
-	if pattern == "builtin" {
-		pkg, err := st.loadByImport(ctx, "builtin", st.rt.cfg.Dir)
+	if pattern == builtinPackageID {
+		pkg, err := st.loadByImport(ctx, builtinPackageID, st.rt.cfg.Dir)
 		if err != nil {
-			return []string{st.addErrorPackage("builtin", err).ID}
+			return []string{st.addErrorPackage(builtinPackageID, err).ID}
 		}
 		return []string{pkg.ID}
 	}
@@ -81,8 +81,8 @@ func (st *loaderState) loadPattern(ctx context.Context, pattern string) []string
 		return rootIDs
 	}
 
-	if strings.HasSuffix(pattern, "/...") {
-		importPrefix := strings.TrimSuffix(pattern, "/...")
+	if before, ok := strings.CutSuffix(pattern, "/..."); ok {
+		importPrefix := before
 		rootIDs, err := st.loadRecursiveImportPattern(ctx, importPrefix)
 		if err != nil {
 			return []string{st.addErrorPackage(pattern, err).ID}
@@ -180,9 +180,9 @@ func (st *loaderState) loadRecursiveImportPattern(ctx context.Context, importPre
 }
 
 func (st *loaderState) ensureBuiltin(ctx context.Context) error {
-	_, err := st.loadByImport(ctx, "builtin", st.rt.cfg.Dir)
+	_, err := st.loadByImport(ctx, builtinPackageID, st.rt.cfg.Dir)
 	if err != nil {
-		st.addErrorPackage("builtin", err)
+		st.addErrorPackage(builtinPackageID, err)
 	}
 	return ctx.Err()
 }
@@ -205,7 +205,7 @@ func (st *loaderState) loadTestVariants(ctx context.Context, rootID string) []st
 		return nil
 	}
 
-	if rootID == "builtin" || isTestVariantID(rootID) || strings.HasSuffix(rootID, ".test") {
+	if rootID == builtinPackageID || isTestVariantID(rootID) || strings.HasSuffix(rootID, ".test") {
 		return nil
 	}
 

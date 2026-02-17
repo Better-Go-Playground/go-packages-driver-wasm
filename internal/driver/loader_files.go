@@ -279,9 +279,9 @@ func (rt *loaderRuntime) resolveImport(importPath, srcDir string) (string, strin
 		return "", "", nil, errors.New("empty import path")
 	}
 
-	if importPath == "builtin" {
-		dir := filepath.Join(rt.goroot, "src", "builtin")
-		return dir, "builtin", nil, nil
+	if importPath == builtinPackageID {
+		dir := filepath.Join(rt.goroot, "src", builtinPackageID)
+		return dir, builtinPackageID, nil, nil
 	}
 
 	if rt.mainModule != nil && (importPath == rt.mainModule.Path || strings.HasPrefix(importPath, rt.mainModule.Path+"/")) {
@@ -815,7 +815,7 @@ func normalizePatterns(workDir string, patterns []string) []string {
 			continue
 		}
 
-		if p == "builtin" {
+		if p == builtinPackageID {
 			out = append(out, p)
 			continue
 		}

@@ -31,7 +31,7 @@ func TestNormalizePatterns(t *testing.T) {
 		"./...",
 		".",
 		"file=internal/driver/loader.go",
-		"builtin",
+		builtinPackageID,
 		"github.com/acme/project/...",
 		"...",
 	})
@@ -40,7 +40,7 @@ func TestNormalizePatterns(t *testing.T) {
 		filepath.ToSlash(filepath.Clean(workDir)) + "/...",
 		filepath.Clean(workDir),
 		"file=" + filepath.Clean(filepath.Join(workDir, "internal/driver/loader.go")),
-		"builtin",
+		builtinPackageID,
 		"github.com/acme/project/...",
 		filepath.ToSlash(filepath.Clean(workDir)) + "/...",
 	}
@@ -125,7 +125,7 @@ func TestLoaderLoadIncludesBuiltinAndModulePackages(t *testing.T) {
 	if !hasKey(rootPkg.Imports, "example.com/app/lib") {
 		t.Fatalf("root package imports missing local package: %+v", rootPkg.Imports)
 	}
-	if !hasKey(byID, "builtin") {
+	if !hasKey(byID, builtinPackageID) {
 		t.Fatalf("builtin package must always be present")
 	}
 	if !hasKey(byID, "example.com/app/lib") {

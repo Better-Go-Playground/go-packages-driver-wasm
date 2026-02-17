@@ -61,7 +61,8 @@ func (ldr *Loader) Load(ctx context.Context, patterns []string) (*packages.Drive
 }
 
 const (
-	safeArgMax = 32767 - 16384
+	safeArgMax       = 32767 - 16384
+	builtinPackageID = "builtin"
 )
 
 const supportedLoadModeMask = packages.NeedName |
